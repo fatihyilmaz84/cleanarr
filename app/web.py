@@ -18,6 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.actions import submit_apply_job, submit_scan_job
 from app.deps import get_session
 from app.jobs import JobManager
+from app.languages import LANGUAGE_OPTIONS, iso_codes_for_language_name
 from app.models import ChangeStatus, PendingChange
 from app.queries import list_history_items, list_review_items, overview_stats
 from app.rules import RuleConfig
@@ -40,7 +41,14 @@ web_router = APIRouter()
 def _current_job(job_manager: JobManager) -> dict | None:
     for job in job_manager.list_recent():
         if job.state in ("queued", "running"):
-            return {"kind": job.kind, "state": job.state.value}
+            return {
+                "kind": job.kind,
+                "state": job.state.value,
+                "progress_current": job.progress_current,
+                "progress_total": job.progress_total,
+                "progress_fraction": job.progress_fraction,
+                "message": job.message,
+            }
     return None
 
 
@@ -48,11 +56,12 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
     job_manager: JobManager = request.app.state.job_manager
     stats = await overview_stats(session)
     msg = request.query_params.get("msg")
+    current_job = _current_job(job_manager)
     return {
         "request": request,
         "pending_review_count": stats["pending_review_count"],
-        "current_job": _current_job(job_manager),
-        "auto_refresh": _current_job(job_manager) is not None,
+        "current_job": current_job,
+        "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],
     }
 
@@ -81,7 +90,36 @@ async def ui_trigger_scan(request: Request):
 @web_router.get("/review")
 async def ui_review(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["items"] = await list_review_items(session, ChangeStatus.pending)
+    all_items = await list_review_items(session, ChangeStatus.pending)
+
+    # Filter options always reflect the full unfiltered set, so picking a
+    # filter doesn't make other options disappear from the dropdowns.
+    ctx["available_library_types"] = sorted({i["library_type"] for i in all_items if i["library_type"]})
+    ctx["available_languages"] = sorted({i["original_language"] for i in all_items if i["original_language"]})
+
+    library_type = request.query_params.get("library_type", "")
+    language = request.query_params.get("language", "")
+    drop_type = request.query_params.get("drop_type", "")
+    q = request.query_params.get("q", "").strip()
+    q_lower = q.lower()
+
+    items = all_items
+    if library_type:
+        items = [i for i in items if i["library_type"] == library_type]
+    if language:
+        items = [i for i in items if i["original_language"] == language]
+    if drop_type:
+        items = [i for i in items if any(p["type"] == drop_type for p in i["dropped"])]
+    if q_lower:
+        items = [
+            i
+            for i in items
+            if q_lower in (i["display_title"] or "").lower() or q_lower in (i["path"] or "").lower()
+        ]
+
+    ctx["items"] = items
+    ctx["total_count"] = len(all_items)
+    ctx["filters"] = {"library_type": library_type, "language": language, "drop_type": drop_type, "q": q}
     return templates.TemplateResponse(request, "review.html", ctx)
 
 
@@ -113,10 +151,40 @@ async def ui_history(request: Request, session: AsyncSession = Depends(get_sessi
     return templates.TemplateResponse(request, "history.html", ctx)
 
 
+def _covered_codes() -> set[str]:
+    codes: set[str] = set()
+    for name, _ in LANGUAGE_OPTIONS:
+        codes |= iso_codes_for_language_name(name)
+    return codes
+
+
+def _selected_language_names(codes: list[str]) -> set[str]:
+    """Which dropdown options should show as selected for a stored keep-list
+    — an option is selected if ANY of its alias codes are present, since a
+    keep-list saved from this same dropdown was expanded to every alias.
+    """
+    codes_lower = {c.lower() for c in codes}
+    return {name for name, _ in LANGUAGE_OPTIONS if iso_codes_for_language_name(name) & codes_lower}
+
+
+def _extra_codes(codes: list[str]) -> str:
+    """Codes in a stored keep-list that no dropdown option covers (hand-typed
+    via the old free-text box, or just a rarer code) — round-tripped through
+    the "other codes" field instead of silently dropped."""
+    covered = _covered_codes()
+    return ", ".join(c for c in codes if c.lower() not in covered)
+
+
 @web_router.get("/rules")
 async def ui_rules(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["rules"] = await get_rule_config(session)
+    rules = await get_rule_config(session)
+    ctx["rules"] = rules
+    ctx["language_options"] = LANGUAGE_OPTIONS
+    ctx["selected_audio_languages"] = _selected_language_names(rules.audio_keep_languages)
+    ctx["selected_subtitle_languages"] = _selected_language_names(rules.subtitle_keep_languages)
+    ctx["audio_extra_codes"] = _extra_codes(rules.audio_keep_languages)
+    ctx["subtitle_extra_codes"] = _extra_codes(rules.subtitle_keep_languages)
     return templates.TemplateResponse(request, "rules.html", ctx)
 
 
@@ -124,16 +192,39 @@ def _split_csv(value: str) -> list[str]:
     return [part.strip() for part in value.split(",") if part.strip()]
 
 
+def _expand_language_selections(selections: list[str]) -> list[str]:
+    """A dropdown selection is a display name ("Norwegian") that expands to
+    every ISO code that name could be tagged with (nor/nob/nno), so keeping
+    "Norwegian" catches regional variants too. A value that isn't a known
+    display name (e.g. typed directly against the API) is treated as an
+    already-a-code literal rather than dropped.
+    """
+    codes: set[str] = set()
+    for value in selections:
+        value = value.strip()
+        if not value:
+            continue
+        matched = iso_codes_for_language_name(value)
+        codes |= matched if matched else {value.lower()}
+    return sorted(codes)
+
+
 @web_router.post("/rules")
 async def ui_save_rules(request: Request, session: AsyncSession = Depends(get_session)):
     form = await request.form()
+    audio_codes = set(_expand_language_selections(form.getlist("audio_keep_languages")))
+    audio_codes |= set(_split_csv(form.get("audio_keep_languages_extra", "")))
+    subtitle_codes = set(_expand_language_selections(form.getlist("subtitle_keep_languages")))
+    subtitle_codes |= set(_split_csv(form.get("subtitle_keep_languages_extra", "")))
+
     rules = RuleConfig(
-        audio_keep_languages=_split_csv(form.get("audio_keep_languages", "")),
-        subtitle_keep_languages=_split_csv(form.get("subtitle_keep_languages", "")),
+        audio_keep_languages=sorted(audio_codes),
+        subtitle_keep_languages=sorted(subtitle_codes),
         drop_title_patterns=_split_csv(form.get("drop_title_patterns", "")),
         keep_untagged_language="keep_untagged_language" in form,
         always_keep_forced_subtitles="always_keep_forced_subtitles" in form,
         drop_commentary_tracks="drop_commentary_tracks" in form,
+        always_keep_original_language="always_keep_original_language" in form,
     )
     await set_rule_config(session, rules)
     return _redirect("/rules", "Rules saved.")

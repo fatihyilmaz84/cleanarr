@@ -87,6 +87,9 @@ async def list_jobs(request: Request):
             "result": j.result,
             "created_at": j.created_at.isoformat(),
             "finished_at": j.finished_at.isoformat() if j.finished_at else None,
+            "progress_current": j.progress_current,
+            "progress_total": j.progress_total,
+            "progress_fraction": j.progress_fraction,
         }
         for j in job_manager.list_recent()
     ]
@@ -106,6 +109,9 @@ async def get_job(job_id: str, request: Request):
         "result": job.result,
         "created_at": job.created_at.isoformat(),
         "finished_at": job.finished_at.isoformat() if job.finished_at else None,
+        "progress_current": job.progress_current,
+        "progress_total": job.progress_total,
+        "progress_fraction": job.progress_fraction,
     }
 
 

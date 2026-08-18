@@ -7,6 +7,7 @@ the remux executor.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -27,7 +28,12 @@ class ApplyResult:
     bytes_reclaimed: int = 0
 
 
-async def apply_pending_change(session: AsyncSession, pending_change_id: int, rule_config: RuleConfig) -> ApplyResult:
+async def apply_pending_change(
+    session: AsyncSession,
+    pending_change_id: int,
+    rule_config: RuleConfig,
+    progress_cb: Callable[[float], None] | None = None,
+) -> ApplyResult:
     change = await session.get(PendingChange, pending_change_id)
     if change is None:
         return ApplyResult(pending_change_id, False, "pending change not found")
@@ -45,8 +51,8 @@ async def apply_pending_change(session: AsyncSession, pending_change_id: int, ru
     path = Path(media_file.path)
     try:
         probe = await asyncio.to_thread(probe_file, path)
-        decisions = decide(probe, rule_config)
-        result = await asyncio.to_thread(apply_remux, path, decisions)
+        decisions = decide(probe, rule_config, media_file.original_language)
+        result = await asyncio.to_thread(apply_remux, path, decisions, progress_cb=progress_cb)
     except (AnalyzerError, RemuxError) as e:
         change.status = ChangeStatus.failed
         change.error_message = str(e)

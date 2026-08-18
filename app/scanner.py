@@ -1,6 +1,10 @@
 """Walks configured media paths, ffprobes new/changed files, and populates
 the review queue. Change detection is mtime+size based so re-scans are cheap
-— unchanged files are never re-probed.
+— unchanged files are never re-probed. Rule evaluation and Sonarr/Radarr
+enrichment are *not* gated on that check, though: they run against the
+already-stored stream data on every scan, so changing the rules or
+connecting Sonarr/Radarr takes effect on the next scan without needing the
+file itself to change.
 """
 
 from __future__ import annotations
@@ -14,7 +18,7 @@ from typing import Callable
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.analyzer import AnalyzerError, probe_file
+from app.analyzer import AnalyzerError, MediaProbe, MediaStream, probe_file
 from app.arr_client import ArrClient, ArrMediaInfo, normalize_path
 from app.models import ChangeStatus, LibraryType, MediaFile, PendingChange, StreamRecord
 from app.rules import RuleConfig, decide
@@ -29,6 +33,7 @@ def _now():
 
 @dataclass
 class ScanSummary:
+    files_total: int = 0  # known upfront from the directory walk, for progress reporting
     files_seen: int = 0
     files_scanned: int = 0  # actually re-ffprobed (new or changed since last scan)
     files_skipped_unchanged: int = 0
@@ -63,6 +68,10 @@ async def run_scan(
     if arr_client is not None:
         arr_index, summary.arr_warnings = await arr_client.build_index()
 
+    # Walk every configured path up front (cheap — directory listing only,
+    # no ffprobe) so the total file count is known before work starts and a
+    # progress bar has something to divide by.
+    work_items: list[tuple[Path, LibraryType]] = []
     for mp in media_paths:
         root = Path(mp.path)
         if not root.exists():
@@ -71,15 +80,35 @@ async def run_scan(
 
         library_type = _library_type_for(mp)
         for file_path in _iter_media_files(root):
-            summary.files_seen += 1
-            try:
-                await _scan_one_file(session, file_path, library_type, rule_config, arr_index, summary)
-            except AnalyzerError as e:
-                summary.errors.append(f"{file_path}: {e}")
-            if progress_cb:
-                progress_cb(summary)
+            work_items.append((file_path, library_type))
+
+    summary.files_total = len(work_items)
+
+    for file_path, library_type in work_items:
+        summary.files_seen += 1
+        try:
+            await _scan_one_file(session, file_path, library_type, rule_config, arr_index, summary)
+        except AnalyzerError as e:
+            summary.errors.append(f"{file_path}: {e}")
+        if progress_cb:
+            progress_cb(summary)
 
     return summary
+
+
+def _stream_from_record(record: StreamRecord) -> MediaStream:
+    return MediaStream(
+        index=record.stream_index,
+        codec_type=record.codec_type,
+        codec_name=record.codec_name,
+        language=record.language,
+        title=record.title,
+        channels=None,
+        is_default=record.is_default,
+        is_forced=record.is_forced,
+        is_commentary=record.is_commentary,
+        is_hearing_impaired=record.is_hearing_impaired,
+    )
 
 
 async def _scan_one_file(
@@ -97,20 +126,54 @@ async def _scan_one_file(
     media_file = result.one_or_none()
 
     unchanged = media_file is not None and media_file.size_bytes == stat.st_size and media_file.mtime == stat.st_mtime
+
     if unchanged:
+        # Skip the expensive ffprobe re-run, but rule evaluation and
+        # Sonarr/Radarr enrichment still run below against the streams
+        # already on file — those are cheap and must reflect the *current*
+        # rules/arr connection even for a file whose bytes haven't moved.
         summary.files_skipped_unchanged += 1
-        return
+        existing_streams = (
+            await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
+        ).all()
+        streams = [_stream_from_record(s) for s in existing_streams]
+    else:
+        probe = await asyncio.to_thread(probe_file, file_path)
+        summary.files_scanned += 1
 
-    probe = await asyncio.to_thread(probe_file, file_path)
-    summary.files_scanned += 1
+        if media_file is None:
+            media_file = MediaFile(path=path_str, library_type=library_type)
 
-    if media_file is None:
-        media_file = MediaFile(path=path_str, library_type=library_type)
+        media_file.size_bytes = stat.st_size
+        media_file.mtime = stat.st_mtime
+        media_file.library_type = library_type
+        media_file.last_scanned_at = _now()
+        session.add(media_file)
+        await session.commit()
+        await session.refresh(media_file)
 
-    media_file.size_bytes = stat.st_size
-    media_file.mtime = stat.st_mtime
-    media_file.library_type = library_type
-    media_file.last_scanned_at = _now()
+        existing_streams = (
+            await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
+        ).all()
+        for s in existing_streams:
+            await session.delete(s)
+
+        for s in probe.streams:
+            session.add(
+                StreamRecord(
+                    file_id=media_file.id,
+                    stream_index=s.index,
+                    codec_type=s.codec_type,
+                    codec_name=s.codec_name,
+                    language=s.language,
+                    title=s.title,
+                    is_default=s.is_default,
+                    is_forced=s.is_forced,
+                    is_commentary=s.is_commentary,
+                    is_hearing_impaired=s.is_hearing_impaired,
+                )
+            )
+        streams = probe.streams
 
     arr_info = arr_index.get(normalize_path(path_str))
     if arr_info:
@@ -120,32 +183,12 @@ async def _scan_one_file(
         media_file.poster_url = arr_info.poster_url
         media_file.arr_id = arr_info.arr_id
         media_file.arr_kind = arr_info.kind
-
+        media_file.original_language = arr_info.original_language
     session.add(media_file)
     await session.commit()
-    await session.refresh(media_file)
 
-    existing_streams = (await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))).all()
-    for s in existing_streams:
-        await session.delete(s)
-
-    for s in probe.streams:
-        session.add(
-            StreamRecord(
-                file_id=media_file.id,
-                stream_index=s.index,
-                codec_type=s.codec_type,
-                codec_name=s.codec_name,
-                language=s.language,
-                title=s.title,
-                is_default=s.is_default,
-                is_forced=s.is_forced,
-                is_commentary=s.is_commentary,
-                is_hearing_impaired=s.is_hearing_impaired,
-            )
-        )
-
-    decisions = decide(probe, rule_config)
+    fake_probe = MediaProbe(path=file_path, duration_seconds=None, streams=streams)
+    decisions = decide(fake_probe, rule_config, media_file.original_language)
     dropped = [d for d in decisions if not d.keep]
 
     existing_change = (

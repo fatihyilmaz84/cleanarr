@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from app.jobs import Job, JobState
 from app.main import create_app
 from tests.test_api import FULL_STREAMS, REDUCED_STREAMS, _fake_subprocess_run, _wait_for_job  # noqa: F401
 
@@ -49,11 +50,14 @@ def test_empty_state_pages_render(client: TestClient):
 
 
 def test_save_rules_via_form(client: TestClient):
+    # audio: two dropdown selections (display names, as the <select multiple>
+    # sends them) plus one hand-typed "extra" code not in the dropdown list.
     resp = client.post(
         "/rules",
         data={
-            "audio_keep_languages": "eng, tur",
-            "subtitle_keep_languages": "eng",
+            "audio_keep_languages": ["English", "Turkish"],
+            "audio_keep_languages_extra": "und",
+            "subtitle_keep_languages": ["English"],
             "always_keep_forced_subtitles": "on",
         },
     )
@@ -61,8 +65,17 @@ def test_save_rules_via_form(client: TestClient):
     assert "Rules saved" in resp.text
 
     settings = client.get("/api/settings").json()
-    assert settings["rules"]["audio_keep_languages"] == ["eng", "tur"]
+    audio_languages = set(settings["rules"]["audio_keep_languages"])
+    assert {"eng", "tur", "und"} <= audio_languages
+    assert set(settings["rules"]["subtitle_keep_languages"]) == {"eng", "en"}  # dropdown expands to ISO 639-1 alias too
     assert settings["rules"]["keep_untagged_language"] is False  # checkbox omitted -> False
+
+    # The Rules page re-selects the dropdown options and re-populates the
+    # extra-codes field from what was just saved.
+    rules_page = client.get("/rules").text
+    assert '<option value="English" selected>' in rules_page
+    assert '<option value="Turkish" selected>' in rules_page
+    assert 'value="und"' in rules_page
 
 
 def test_save_media_paths_via_form(client: TestClient, media_dir: Path):
@@ -83,6 +96,16 @@ def test_arr_api_key_preserved_when_blank(client: TestClient):
     client.post("/settings/arr", data={"radarr_url": "http://radarr:7878/", "radarr_api_key": ""})
     settings2 = client.get("/api/settings").json()
     assert settings2["arr"]["radarr_api_key"] == "***"
+
+
+def test_topbar_shows_progress_bar_for_running_job(client: TestClient):
+    job_manager = client.app.state.job_manager
+    job = Job(id="fake-job", kind="apply", state=JobState.running, progress_current=3, progress_total=10)
+    job_manager._jobs[job.id] = job
+
+    page = client.get("/").text
+    assert "3/10" in page
+    assert "width: 30.0%" in page
 
 
 def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):

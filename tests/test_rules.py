@@ -2,8 +2,8 @@ from app.rules import RuleConfig, decide
 from tests.fixtures import make_probe, make_stream, typical_movie_streams
 
 
-def decisions_by_index(probe, config):
-    return {d.stream.index: d for d in decide(probe, config)}
+def decisions_by_index(probe, config, original_language=None):
+    return {d.stream.index: d for d in decide(probe, config, original_language)}
 
 
 def test_empty_rule_config_keeps_everything():
@@ -137,3 +137,54 @@ def test_subtitles_can_all_be_dropped_no_safety_override():
     sub_decisions = [d for d in decisions if d.stream.codec_type == "subtitle"]
 
     assert all(not d.keep for d in sub_decisions)
+
+
+def test_original_language_track_kept_even_when_not_in_keep_list():
+    # A Korean movie with an "eng only" global rule shouldn't lose its own
+    # Korean audio/subs — Sonarr/Radarr told us this file's original
+    # language is Korean.
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "audio", language="kor", is_default=True),
+        make_stream(3, "subtitle", language="kor"),
+        make_stream(4, "subtitle", language="jpn"),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(audio_keep_languages=["eng"], subtitle_keep_languages=["eng"])
+
+    by_index = decisions_by_index(probe, config, original_language="Korean")
+
+    assert by_index[1].keep is True  # in keep-list
+    assert by_index[2].keep is True  # not in keep-list, but matches original language
+    assert "original language" in by_index[2].reason
+    assert by_index[3].keep is True  # subtitle also protected
+    assert by_index[4].keep is False  # unrelated language, still dropped
+
+
+def test_original_language_override_can_be_disabled():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="kor"),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(audio_keep_languages=["eng"], always_keep_original_language=False)
+
+    by_index = decisions_by_index(probe, config, original_language="Korean")
+
+    assert by_index[2].keep is False
+
+
+def test_unmapped_original_language_name_is_harmless():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="kor"),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(audio_keep_languages=["eng"])
+
+    by_index = decisions_by_index(probe, config, original_language="Not A Real Language")
+
+    assert by_index[2].keep is False

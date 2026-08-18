@@ -39,11 +39,13 @@ class MediaFile(SQLModel, table=True):
     mtime: float = 0.0
     last_scanned_at: datetime = Field(default_factory=utcnow)
 
-    # Enrichment from Sonarr/Radarr — nullable, purely for display.
+    # Enrichment from Sonarr/Radarr — nullable, purely for display except
+    # original_language, which the rule engine also reads (see app/rules.py).
     arr_kind: str | None = None  # "sonarr" | "radarr"
     arr_id: int | None = None
     display_title: str | None = None
     poster_url: str | None = None
+    original_language: str | None = None  # e.g. "Korean"
 
 
 class StreamRecord(SQLModel, table=True):

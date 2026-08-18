@@ -17,6 +17,8 @@ from __future__ import annotations
 import os
 import shutil
 import subprocess
+import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -106,6 +108,25 @@ def verify_output(
             )
 
 
+def _watch_output_growth(
+    tmp_path: Path, expected_bytes: int, progress_cb: Callable[[float], None], stop_event: threading.Event
+) -> None:
+    """`-c copy` writes the output progressively — polling its size against
+    the source's size (a reasonable proxy, since dropped audio/subtitle
+    tracks are a small fraction of a video-dominated file) is a way to show
+    real remux progress without touching the ffmpeg invocation itself.
+    Capped below 1.0 — only the caller marks true completion, after
+    verification and the atomic replace.
+    """
+    while not stop_event.wait(1.0):
+        try:
+            size = tmp_path.stat().st_size
+        except FileNotFoundError:
+            continue
+        if expected_bytes > 0:
+            progress_cb(min(size / expected_bytes, 0.99))
+
+
 def apply_remux(
     source: Path,
     decisions: list[StreamDecision],
@@ -113,6 +134,7 @@ def apply_remux(
     ffmpeg_bin: str = FFMPEG_BIN,
     ffprobe_bin: str = FFPROBE_BIN,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    progress_cb: Callable[[float], None] | None = None,
 ) -> RemuxResult:
     dropped = [d for d in decisions if not d.keep]
     if not dropped:
@@ -126,6 +148,14 @@ def apply_remux(
     tmp_path = _tmp_path_for(source)
     cmd = build_ffmpeg_command(source, tmp_path, decisions, ffmpeg_bin=ffmpeg_bin)
 
+    stop_event = threading.Event()
+    watcher = None
+    if progress_cb is not None:
+        watcher = threading.Thread(
+            target=_watch_output_growth, args=(tmp_path, bytes_before, progress_cb, stop_event), daemon=True
+        )
+        watcher.start()
+
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds)
         if result.returncode != 0:
@@ -136,8 +166,14 @@ def apply_remux(
         bytes_after = tmp_path.stat().st_size
         os.replace(tmp_path, source)
     finally:
+        stop_event.set()
+        if watcher is not None:
+            watcher.join(timeout=2)
         if tmp_path.exists():
             tmp_path.unlink(missing_ok=True)
+
+    if progress_cb is not None:
+        progress_cb(1.0)
 
     return RemuxResult(
         applied=True,

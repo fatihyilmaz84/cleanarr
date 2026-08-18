@@ -20,6 +20,7 @@ async def review_item(session: AsyncSession, change: PendingChange) -> dict:
         "display_title": mf.display_title if mf else None,
         "poster_url": mf.poster_url if mf else None,
         "library_type": mf.library_type.value if mf else None,
+        "original_language": mf.original_language if mf else None,
         "status": change.status.value,
         "proposed": change.proposed,
         "kept": [p for p in change.proposed if p["keep"]],

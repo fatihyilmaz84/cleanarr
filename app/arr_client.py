@@ -9,6 +9,7 @@ purposes) size never change enough to look "missing" or "upgraded".
 
 from __future__ import annotations
 
+import asyncio
 import posixpath
 from dataclasses import dataclass
 
@@ -33,6 +34,7 @@ class ArrMediaInfo:
     season_number: int | None = None
     episode_number: int | None = None
     arr_id: int | None = None
+    original_language: str | None = None  # e.g. "Korean" — Radarr/Sonarr's originalLanguage.name
 
 
 def normalize_path(path: str) -> str:
@@ -108,6 +110,7 @@ class ArrClient:
                 year=movie.get("year"),
                 poster_url=_poster_url(movie.get("images")),
                 arr_id=movie.get("id"),
+                original_language=(movie.get("originalLanguage") or {}).get("name"),
             )
         return index, warnings
 
@@ -115,24 +118,44 @@ class ArrClient:
         if not (self.sonarr_url and self.sonarr_api_key):
             return {}, []
 
-        warnings: list[str] = []
-        index: dict[str, ArrMediaInfo] = {}
         try:
             series_list = await self._get(self.sonarr_url, self.sonarr_api_key, "/api/v3/series")
         except (httpx.HTTPError, ValueError) as e:
             return {}, [f"Sonarr: failed to fetch series list ({e})"]
 
-        for series in series_list:
+        # One /api/v3/episodefile request per series — sequentially this is
+        # a full scan-blocking round trip per show. Fetch them concurrently
+        # (capped, so a library with hundreds of shows doesn't fire hundreds
+        # of requests at Sonarr at once).
+        semaphore = asyncio.Semaphore(8)
+
+        async def fetch_episode_files(series: dict) -> tuple[dict, list[dict] | None, str | None]:
+            series_title = series.get("title", "Unknown")
+            async with semaphore:
+                try:
+                    episode_files = await self._get(
+                        self.sonarr_url,
+                        self.sonarr_api_key,
+                        "/api/v3/episodefile",
+                        params={"seriesId": series.get("id")},
+                    )
+                except (httpx.HTTPError, ValueError) as e:
+                    return series, None, f"Sonarr: failed to fetch episode files for '{series_title}' ({e})"
+            return series, episode_files, None
+
+        results = await asyncio.gather(*(fetch_episode_files(s) for s in series_list))
+
+        warnings: list[str] = []
+        index: dict[str, ArrMediaInfo] = {}
+        for series, episode_files, warning in results:
+            if warning:
+                warnings.append(warning)
+                continue
+
             series_id = series.get("id")
             series_title = series.get("title", "Unknown")
             poster_url = _poster_url(series.get("images"))
-            try:
-                episode_files = await self._get(
-                    self.sonarr_url, self.sonarr_api_key, "/api/v3/episodefile", params={"seriesId": series_id}
-                )
-            except (httpx.HTTPError, ValueError) as e:
-                warnings.append(f"Sonarr: failed to fetch episode files for '{series_title}' ({e})")
-                continue
+            original_language = (series.get("originalLanguage") or {}).get("name")
 
             for ep_file in episode_files:
                 file_path = ep_file.get("path")
@@ -145,6 +168,7 @@ class ArrClient:
                     season_number=ep_file.get("seasonNumber"),
                     poster_url=poster_url,
                     arr_id=series_id,
+                    original_language=original_language,
                 )
         return index, warnings
 

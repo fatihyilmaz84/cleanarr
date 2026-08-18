@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from app.analyzer import MediaProbe, MediaStream
+from app.languages import iso_codes_for_language_name
 
 
 class RuleConfig(BaseModel):
@@ -25,6 +26,12 @@ class RuleConfig(BaseModel):
     keep_untagged_language: bool = True
     always_keep_forced_subtitles: bool = True
     drop_commentary_tracks: bool = False
+
+    # When a Sonarr/Radarr connection resolves a file's original language
+    # (e.g. "Korean" for a Korean movie), keep tracks in that language even
+    # if it isn't in the keep-lists above — so a global "eng only" rule
+    # doesn't strip a foreign film's own native-language audio/subs.
+    always_keep_original_language: bool = True
 
     # Regex patterns (case-insensitive) matched against a stream's title tag.
     # A match forces a drop, e.g. ["commentary", "sdh"].
@@ -56,7 +63,15 @@ def _matches_drop_pattern(title: str | None, patterns: list[str]) -> str | None:
     return None
 
 
-def _decide_audio(stream: MediaStream, config: RuleConfig) -> StreamDecision:
+def _matches_original_language(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> bool:
+    return (
+        config.always_keep_original_language
+        and stream.language is not None
+        and stream.language.lower() in original_language_codes
+    )
+
+
+def _decide_audio(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> StreamDecision:
     drop_pattern = _matches_drop_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
         return StreamDecision(stream, False, f"title matches drop pattern '{drop_pattern}'")
@@ -76,10 +91,13 @@ def _decide_audio(stream: MediaStream, config: RuleConfig) -> StreamDecision:
     if stream.language.lower() in allowed_languages:
         return StreamDecision(stream, True, f"language '{stream.language}' in keep-list")
 
+    if _matches_original_language(stream, config, original_language_codes):
+        return StreamDecision(stream, True, f"language '{stream.language}' matches media's original language, kept")
+
     return StreamDecision(stream, False, f"language '{stream.language}' not in keep-list")
 
 
-def _decide_subtitle(stream: MediaStream, config: RuleConfig) -> StreamDecision:
+def _decide_subtitle(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> StreamDecision:
     if stream.is_forced and config.always_keep_forced_subtitles:
         return StreamDecision(stream, True, "forced subtitle, always kept")
 
@@ -98,6 +116,9 @@ def _decide_subtitle(stream: MediaStream, config: RuleConfig) -> StreamDecision:
 
     if stream.language.lower() in allowed_languages:
         return StreamDecision(stream, True, f"language '{stream.language}' in keep-list")
+
+    if _matches_original_language(stream, config, original_language_codes):
+        return StreamDecision(stream, True, f"language '{stream.language}' matches media's original language, kept")
 
     return StreamDecision(stream, False, f"language '{stream.language}' not in keep-list")
 
@@ -121,19 +142,25 @@ def _apply_keep_at_least_one_audio(decisions: list[StreamDecision]) -> list[Stre
     return [fixed if d.stream.index == fallback.stream.index else d for d in decisions]
 
 
-def decide(probe: MediaProbe, config: RuleConfig) -> list[StreamDecision]:
+def decide(probe: MediaProbe, config: RuleConfig, original_language: str | None = None) -> list[StreamDecision]:
     """Evaluate every stream in `probe` against `config`. Video streams are
     always kept — this app only ever touches audio/subtitle tracks.
+
+    `original_language` is the media's own language as reported by
+    Sonarr/Radarr (e.g. "Korean"), if known — used only when
+    `config.always_keep_original_language` is set, to protect that
+    language's tracks regardless of the configured keep-lists.
     """
+    original_language_codes = iso_codes_for_language_name(original_language)
     decisions: list[StreamDecision] = []
 
     for stream in probe.streams:
         if stream.codec_type == "video":
             decisions.append(StreamDecision(stream, True, "video track, always kept"))
         elif stream.codec_type == "audio":
-            decisions.append(_decide_audio(stream, config))
+            decisions.append(_decide_audio(stream, config, original_language_codes))
         elif stream.codec_type == "subtitle":
-            decisions.append(_decide_subtitle(stream, config))
+            decisions.append(_decide_subtitle(stream, config, original_language_codes))
         else:
             decisions.append(StreamDecision(stream, True, f"unrecognized stream type '{stream.codec_type}', kept"))
 

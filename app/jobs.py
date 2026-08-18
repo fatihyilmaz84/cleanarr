@@ -38,6 +38,14 @@ class Job:
     result: dict | None = None
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     finished_at: datetime | None = None
+    # Set by the job's own run function as it works — 0/0 means "no progress
+    # info available yet" (e.g. before the file count is known), not "done".
+    progress_current: int = 0
+    progress_total: int = 0
+    # Fractional progress (0.0-1.0) *within* the current unit counted by
+    # progress_current — e.g. how far a single large remux has gotten, so a
+    # single-item apply job's bar isn't frozen at 0% for its whole duration.
+    progress_fraction: float = 0.0
 
 
 RunFn = Callable[[Job], Awaitable[None]]

@@ -17,6 +17,7 @@ RADARR_MOVIES = [
         "path": "/data/movies/Example Movie (2020)",
         "images": [{"coverType": "poster", "remoteUrl": "http://poster/1.jpg"}],
         "movieFile": {"relativePath": "Example Movie (2020).mkv"},
+        "originalLanguage": {"id": 1, "name": "Korean"},
     },
     {
         "id": 2,
@@ -28,7 +29,12 @@ RADARR_MOVIES = [
 ]
 
 SONARR_SERIES = [
-    {"id": 10, "title": "Example Show", "images": [{"coverType": "poster", "url": "/poster/10.jpg"}]},
+    {
+        "id": 10,
+        "title": "Example Show",
+        "images": [{"coverType": "poster", "url": "/poster/10.jpg"}],
+        "originalLanguage": {"id": 2, "name": "Japanese"},
+    },
 ]
 
 SONARR_EPISODE_FILES = [
@@ -71,6 +77,7 @@ async def test_build_movie_index_resolves_path_from_root_plus_relative():
     assert info.year == 2020
     assert info.poster_url == "http://poster/1.jpg"
     assert info.kind == "movie"
+    assert info.original_language == "Korean"
 
 
 @pytest.mark.asyncio
@@ -93,6 +100,7 @@ async def test_build_series_index_fetches_per_series_episode_files():
     assert info.kind == "episode"
     assert info.series_title == "Example Show"
     assert info.season_number == 1
+    assert info.original_language == "Japanese"
 
 
 @pytest.mark.asyncio

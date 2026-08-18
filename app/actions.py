@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from app.apply import apply_pending_change
 from app.arr_client import ArrClient
 from app.jobs import Job, JobManager
-from app.scanner import run_scan
+from app.scanner import ScanSummary, run_scan
 from app.settings_store import ArrConfig, get_arr_config, get_media_paths, get_rule_config
 
 
@@ -36,9 +36,14 @@ def submit_scan_job(session_factory: async_sessionmaker, job_manager: JobManager
             job.result = {"files_seen": 0}
             return
 
+        def progress_cb(summary: ScanSummary) -> None:
+            job.progress_current = summary.files_seen
+            job.progress_total = summary.files_total
+            job.message = f"scanning… {summary.files_seen}/{summary.files_total}"
+
         arr_client = build_arr_client(arr_config)
         async with session_factory() as session:
-            summary = await run_scan(session, media_paths, rule_config, arr_client)
+            summary = await run_scan(session, media_paths, rule_config, arr_client, progress_cb=progress_cb)
 
         job.result = asdict(summary)
         job.message = (
@@ -52,13 +57,20 @@ def submit_scan_job(session_factory: async_sessionmaker, job_manager: JobManager
 
 def submit_apply_job(session_factory: async_sessionmaker, job_manager: JobManager, change_ids: list[int]) -> str:
     async def run(job: Job) -> None:
+        job.progress_total = len(change_ids)
         results = []
+
+        def progress_cb(fraction: float) -> None:
+            job.progress_fraction = fraction
+
         # Applied strictly one file at a time within this job — required by
         # the remux executor given how little free space the array has.
         for change_id in change_ids:
+            job.progress_fraction = 0.0
+            job.message = f"applying {job.progress_current + 1}/{job.progress_total}…"
             async with session_factory() as session:
                 rule_config = await get_rule_config(session)
-                result = await apply_pending_change(session, change_id, rule_config)
+                result = await apply_pending_change(session, change_id, rule_config, progress_cb=progress_cb)
                 results.append(
                     {
                         "pending_change_id": result.pending_change_id,
@@ -67,6 +79,8 @@ def submit_apply_job(session_factory: async_sessionmaker, job_manager: JobManage
                         "bytes_reclaimed": result.bytes_reclaimed,
                     }
                 )
+            job.progress_current += 1
+            job.progress_fraction = 0.0
         job.result = {"results": results}
         succeeded = sum(1 for r in results if r["success"])
         job.message = f"applied {succeeded}/{len(results)}"

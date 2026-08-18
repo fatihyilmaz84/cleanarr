@@ -1,5 +1,6 @@
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -118,6 +119,43 @@ def test_apply_remux_success_replaces_file_atomically(tmp_path, monkeypatch):
     assert len(result.streams_removed) == 1
     assert result.streams_removed[0]["language"] == "jpn"
     assert not (f.parent / f".cleanarr.tmp.{f.name}").exists()  # tmp cleaned up
+
+
+def test_apply_remux_reports_progress_via_output_growth(tmp_path, monkeypatch):
+    # Simulates a slow "-c copy" by growing the tmp output file in two steps
+    # with a pause in between, so the background size-watcher thread has a
+    # real chance to observe a partial size before ffmpeg "finishes".
+    f = tmp_path / "movie.mkv"
+    f.write_bytes(b"x" * 1000)
+
+    decisions = _decisions_drop_one()
+    kept_streams = [d.stream for d in decisions if d.keep]
+    call_state = {"n": 0}
+
+    def fake_probe(path, ffprobe_bin="ffprobe"):
+        call_state["n"] += 1
+        if call_state["n"] == 1:
+            return make_probe([d.stream for d in decisions], duration_seconds=100.0)
+        return make_probe(kept_streams, duration_seconds=100.0)
+
+    def fake_run(cmd, capture_output, text, timeout):
+        out_path = remux_mod.Path(cmd[-1])
+        out_path.write_bytes(b"x" * 400)  # partial write, ~40% of original size
+        time.sleep(1.2)  # give the watcher thread (1s poll interval) a chance to sample it
+        out_path.write_bytes(b"x" * 900)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(remux_mod, "probe_file", fake_probe)
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(shutil, "disk_usage", lambda path: type("U", (), {"free": 10 * 1024**3})())
+
+    observed: list[float] = []
+    result = apply_remux(f, decisions, progress_cb=observed.append)
+
+    assert result.applied is True
+    assert observed[-1] == 1.0  # final call always signals true completion
+    assert any(0 < v < 1.0 for v in observed), observed  # at least one real partial sample
+    assert all(v <= 1.0 for v in observed)
 
 
 def test_apply_remux_ffmpeg_failure_leaves_original_untouched(tmp_path, monkeypatch):

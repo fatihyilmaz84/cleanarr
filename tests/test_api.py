@@ -100,6 +100,8 @@ def test_full_scan_review_approve_apply_cycle(client: TestClient, media_dir: Pat
     assert scan_job["result"]["files_scanned"] == 1
     assert scan_job["result"]["files_with_pending_changes"] == 1
     assert scan_job["result"]["errors"] == []
+    assert scan_job["progress_total"] == 1
+    assert scan_job["progress_current"] == 1
 
     pending = client.get("/api/review", params={"status": "pending"}).json()
     assert len(pending) == 1
@@ -117,6 +119,8 @@ def test_full_scan_review_approve_apply_cycle(client: TestClient, media_dir: Pat
     approve_job = _wait_for_job(client, approve_job_id)
     assert approve_job["state"] == "done", approve_job
     assert approve_job["result"]["results"][0]["success"] is True
+    assert approve_job["progress_total"] == 1
+    assert approve_job["progress_current"] == 1
 
     assert client.get("/api/review", params={"status": "pending"}).json() == []
 

@@ -122,9 +122,19 @@
     <h1 class="font-headline-sm text-headline-sm text-on-surface">{% block page_title %}{% endblock %}</h1>
     <div class="flex items-center gap-6">
       {% if current_job %}
-        <div class="flex items-center gap-2">
+        <div class="flex items-center gap-3">
           <span class="status-dot status-active animate-pulse"></span>
-          <span class="font-label-caps text-label-caps text-on-surface">{{ current_job.kind|capitalize }} running&hellip;</span>
+          <div class="flex flex-col gap-1 min-w-[180px]">
+            <span class="font-label-caps text-label-caps text-on-surface">
+              {{ current_job.kind|capitalize }} running&hellip;
+              {% if current_job.progress_total %}{{ current_job.progress_current }}/{{ current_job.progress_total }}{% endif %}
+            </span>
+            {% if current_job.progress_total %}
+            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
+              <div class="h-full bg-primary transition-all" style="width: {{ (((current_job.progress_current + current_job.progress_fraction) / current_job.progress_total) * 100) | round(1) }}%"></div>
+            </div>
+            {% endif %}
+          </div>
         </div>
       {% else %}
         <div class="flex items-center gap-2">
