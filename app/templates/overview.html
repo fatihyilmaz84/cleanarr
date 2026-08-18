@@ -35,7 +35,7 @@
       <div class="absolute left-[-5px] top-1 w-[9px] h-[9px] rounded-full bg-surface-container border-2 border-[#111111] ring-1 ring-white/20"></div>
       <div class="flex justify-between items-start mb-1">
         <span class="font-body-md text-body-md text-on-surface">{{ h.display_title or h.path }}</span>
-        <span class="font-code-md text-[11px] text-on-surface-variant">{{ h.applied_at.strftime("%b %d, %H:%M") }}</span>
+        <span class="font-code-md text-[11px] text-on-surface-variant">{{ (h.applied_at | localtime(display_timezone)).strftime("%b %d, %H:%M") }}</span>
       </div>
       <p class="font-body-md text-[13px] text-on-surface-variant">
         Removed {{ h.streams_removed|length }} track(s), reclaimed {{ "%.1f"|format(h.bytes_reclaimed / 1e6) }}MB

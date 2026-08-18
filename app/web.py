@@ -8,7 +8,9 @@ client-side JS.
 
 from __future__ import annotations
 
+from datetime import datetime
 from urllib.parse import quote
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
@@ -24,11 +26,14 @@ from app.queries import list_history_items, list_review_items, overview_stats
 from app.rules import RuleConfig
 from app.settings_store import (
     ArrConfig,
+    DisplaySettings,
     MediaPath,
     get_arr_config,
+    get_display_settings,
     get_media_paths,
     get_rule_config,
     set_arr_config,
+    set_display_settings,
     set_media_paths,
     set_rule_config,
 )
@@ -36,6 +41,23 @@ from app.settings_store import (
 templates = Jinja2Templates(directory="app/templates")
 
 web_router = APIRouter()
+
+
+def _localtime(dt: datetime | None, tz_name: str) -> datetime | None:
+    """Jinja filter: convert a stored UTC-aware datetime to the configured
+    display timezone. Falls back to UTC for an unrecognized zone name rather
+    than raising mid-render.
+    """
+    if dt is None:
+        return None
+    try:
+        tz = ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+    return dt.astimezone(tz)
+
+
+templates.env.filters["localtime"] = _localtime
 
 
 def _current_job(job_manager: JobManager) -> dict | None:
@@ -57,12 +79,14 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
     stats = await overview_stats(session)
     msg = request.query_params.get("msg")
     current_job = _current_job(job_manager)
+    display_settings = await get_display_settings(session)
     return {
         "request": request,
         "pending_review_count": stats["pending_review_count"],
         "current_job": current_job,
         "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],
+        "display_timezone": display_settings.timezone,
     }
 
 
@@ -235,7 +259,20 @@ async def ui_settings(request: Request, session: AsyncSession = Depends(get_sess
     ctx = await _base_context(request, session)
     ctx["media_paths"] = await get_media_paths(session)
     ctx["arr"] = (await get_arr_config(session)).redacted()
+    ctx["available_timezones"] = sorted(available_timezones())
     return templates.TemplateResponse(request, "settings.html", ctx)
+
+
+@web_router.post("/settings/display")
+async def ui_save_display_settings(request: Request, session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    tz_name = form.get("timezone", "UTC").strip() or "UTC"
+    try:
+        ZoneInfo(tz_name)
+    except ZoneInfoNotFoundError:
+        return _redirect("/settings", f"Unrecognized timezone '{tz_name}' — not saved.")
+    await set_display_settings(session, DisplaySettings(timezone=tz_name))
+    return _redirect("/settings", "Display timezone saved.")
 
 
 @web_router.post("/settings/media-paths")

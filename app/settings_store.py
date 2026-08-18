@@ -5,7 +5,9 @@ Sonarr/Radarr connection info.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+import uuid
+
+from pydantic import BaseModel, Field
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -15,6 +17,8 @@ from app.rules import RuleConfig
 RULES_KEY = "rules"
 MEDIA_PATHS_KEY = "media_paths"
 ARR_CONFIG_KEY = "arr_config"
+DISPLAY_SETTINGS_KEY = "display_settings"
+SCHEDULES_KEY = "schedules"
 
 
 class ArrConfig(BaseModel):
@@ -79,3 +83,40 @@ async def get_arr_config(session: AsyncSession) -> ArrConfig:
 
 async def set_arr_config(session: AsyncSession, config: ArrConfig) -> None:
     await _set(session, ARR_CONFIG_KEY, config.model_dump())
+
+
+class DisplaySettings(BaseModel):
+    # IANA zone name (e.g. "Europe/Berlin"). Stored timestamps are always
+    # UTC; this only controls what timezone they're rendered in.
+    timezone: str = "UTC"
+
+
+async def get_display_settings(session: AsyncSession) -> DisplaySettings:
+    data = await _get(session, DISPLAY_SETTINGS_KEY)
+    return DisplaySettings.model_validate(data) if data else DisplaySettings()
+
+
+async def set_display_settings(session: AsyncSession, settings: DisplaySettings) -> None:
+    await _set(session, DISPLAY_SETTINGS_KEY, settings.model_dump())
+
+
+class Schedule(BaseModel):
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    label: str = ""
+    enabled: bool = True
+    hour: int = 4
+    minute: int = 0
+    # Python's date.weekday(): 0=Monday .. 6=Sunday. Defaults to every day.
+    days_of_week: list[int] = Field(default_factory=lambda: list(range(7)))
+    # Scanning only ever proposes changes for review — this is the one
+    # explicit opt-in to actually apply them unattended. Off by default.
+    auto_apply: bool = False
+
+
+async def get_schedules(session: AsyncSession) -> list[Schedule]:
+    data = await _get(session, SCHEDULES_KEY)
+    return [Schedule.model_validate(s) for s in data.get("schedules", [])] if data else []
+
+
+async def set_schedules(session: AsyncSession, schedules: list[Schedule]) -> None:
+    await _set(session, SCHEDULES_KEY, {"schedules": [s.model_dump() for s in schedules]})

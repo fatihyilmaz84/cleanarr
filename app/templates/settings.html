@@ -35,4 +35,20 @@
     <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Connection</button>
   </form>
 </div>
+
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Display</h3>
+  <p class="font-body-md text-body-md text-on-surface-variant mb-4">Timestamps are always stored in UTC — this only controls what timezone they're shown in (and, if you set up a schedule, what "04:00" means).</p>
+  <form method="post" action="/settings/display" class="space-y-4">
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Timezone</label>
+      <select name="timezone" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        {% for tz in available_timezones %}
+        <option value="{{ tz }}" {% if tz == display_timezone %}selected{% endif %}>{{ tz }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Display Settings</button>
+  </form>
+</div>
 {% endblock %}
