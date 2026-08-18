@@ -204,12 +204,30 @@ This is a substantially bigger feature than #5 above (which only decides
 *keep vs. drop*) — this one *rewrites* track titles/language/disposition
 metadata to a consistent scheme, for both Jellyfin and Plex.
 
-**Scope clarification needed before starting**: the spec says "Never...
-remove tracks" — but removing unwanted tracks is this app's whole existing
-purpose (see README). These need to coexist as separate operations on the
-same remux pass (drop-by-rule as today, *plus* rename/retag whatever
-survives), not one replacing the other — worth confirming that reading
-with the user before implementation, rather than assuming.
+### Architecture — resolved 2026-08-19
+- **Separate menu item**, not folded into Rules/Review/Queue — its own nav
+  entry and page(s), own settings, own review-style flow. Reuse
+  Review/Queue's *pattern* (propose -> show before/after -> approve/queue
+  -> apply) rather than the same pages, since it's a conceptually distinct
+  operation (rename/retag vs. drop).
+- Can run **standalone or alongside** the existing rule-based remover —
+  neither requires the other to be configured.
+- **Per-track mutual exclusion when both are active on the same file**:
+  - A track the rule engine (`app/rules.py::decide`) has decided to
+    **drop** is automatically out of scope for normalization — this falls
+    out naturally from remuxing (`-metadata`/`-disposition` can only be
+    set on a stream that's still `-map`ped into the output; a dropped
+    stream doesn't exist in the result to retag), so this direction needs
+    no extra coordination logic, just correct ordering: resolve drop
+    decisions first, normalize only what survives.
+  - The reverse needs real logic: a track a user has explicitly selected
+    for normalization must be **protected from removal**, overriding
+    whatever the rule engine would otherwise do. This is the same shape
+    as `app/rules.py::apply_overrides` from #1 (force a decision from drop
+    to keep) — reuse that mechanism (or a sibling of it keyed the same
+    way, by stream index) rather than inventing new coordination state.
+  - Net effect: "marked for normalization" implies "keep," decided before
+    the drop pass finalizes, not layered on after.
 
 ### What already exists and this should build on, not duplicate
 - Language canon + codes: `app/languages.py` (`LANGUAGE_OPTIONS`,
@@ -236,11 +254,20 @@ with the user before implementation, rather than assuming.
   `streams_removed` for rename operations.
 
 ### Genuinely new work
+- [ ] **New nav item + page(s)** — `app/templates/base.html`'s nav_link
+      list gets a "Normalizer" entry (own icon/section, likely under
+      "Library" alongside Review/Queue/History) and its own
+      propose -> approve -> apply page flow, separate from Rules/Review.
 - [ ] **Title/metadata rewriting itself** — `app/remux.py`'s
       `build_ffmpeg_command` only ever does `-map` (keep/drop); it never
       sets `-metadata:s:i:title=...`, `-metadata:s:i:language=...`, or
       `-disposition:s:i:...`. This is the core new capability everything
       else depends on.
+- [ ] Per-track normalization-vs-removal exclusivity (see Architecture
+      above) — needs the drop pass resolved and any normalize-selected
+      tracks force-kept *before* the final `-map`/`-metadata` ffmpeg
+      command is assembled, so the two operations combine into one remux
+      pass rather than requiring two separate file rewrites.
 - [ ] Naming-style setting (`Language - Attribute` vs `Language Attribute`
       vs bracketed, etc.) as a new `RuleConfig`/settings field, applied
       library-wide — one canonical scheme, not per-file.
