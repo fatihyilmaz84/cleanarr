@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>OpsMind - Infrastructure Dashboard</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@400;500&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "error-container": "#93000a",
+                        "secondary-container": "#00a572",
+                        "background": "#12131a",
+                        "on-primary-fixed": "#001a42",
+                        "inverse-on-surface": "#2f3037",
+                        "surface-tint": "#adc6ff",
+                        "surface-container-highest": "#33343c",
+                        "outline": "#8c909f",
+                        "on-secondary-container": "#00311f",
+                        "surface-variant": "#33343c",
+                        "secondary": "#4edea3",
+                        "on-error": "#690005",
+                        "on-surface": "#e2e1eb",
+                        "inverse-primary": "#005ac2",
+                        "on-surface-variant": "#c2c6d6",
+                        "surface-container-low": "#1a1b22",
+                        "surface": "#12131a",
+                        "tertiary-fixed": "#ffdad7",
+                        "primary-fixed": "#d8e2ff",
+                        "on-tertiary-fixed-variant": "#930013",
+                        "tertiary": "#ffb3ad",
+                        "on-primary-fixed-variant": "#004395",
+                        "surface-container-lowest": "#0c0e14",
+                        "primary-container": "#4d8eff",
+                        "inverse-surface": "#e2e1eb",
+                        "primary": "#adc6ff",
+                        "on-secondary-fixed-variant": "#005236",
+                        "tertiary-fixed-dim": "#ffb3ad",
+                        "on-primary-container": "#00285d",
+                        "on-tertiary-fixed": "#410004",
+                        "secondary-fixed": "#6ffbbe",
+                        "on-background": "#e2e1eb",
+                        "outline-variant": "#424754",
+                        "surface-dim": "#12131a",
+                        "tertiary-container": "#ff5451",
+                        "on-error-container": "#ffdad6",
+                        "surface-container-high": "#282a31",
+                        "on-secondary-fixed": "#002113",
+                        "on-tertiary": "#68000a",
+                        "surface-container": "#1e1f26",
+                        "on-tertiary-container": "#5c0008",
+                        "on-secondary": "#003824",
+                        "on-primary": "#002e6a",
+                        "surface-bright": "#383940",
+                        "secondary-fixed-dim": "#4edea3",
+                        "error": "#ffb4ab",
+                        "primary-fixed-dim": "#adc6ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "container-max": "1440px",
+                        "unit": "4px",
+                        "margin": "32px",
+                        "gutter": "24px"
+                    },
+                    "fontFamily": {
+                        "headline-md": ["Geist"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "code-md": ["JetBrains Mono"],
+                        "headline-sm": ["Geist"],
+                        "display-lg": ["Geist"],
+                        "body-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "headline-md": ["32px", { "lineHeight": "1.2", "letterSpacing": "-0.01em", "fontWeight": "500" }],
+                        "body-md": ["14px", { "lineHeight": "1.5", "fontWeight": "400" }],
+                        "label-caps": ["11px", { "lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "code-md": ["13px", { "lineHeight": "1.6", "fontWeight": "400" }],
+                        "headline-sm": ["24px", { "lineHeight": "1.3", "fontWeight": "500" }],
+                        "display-lg": ["48px", { "lineHeight": "1.1", "letterSpacing": "-0.02em", "fontWeight": "600" }],
+                        "body-lg": ["18px", { "lineHeight": "1.6", "fontWeight": "400" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { background-color: #050505; color: #e2e1eb; font-family: 'Inter', sans-serif; }
+        .glass-panel { background-color: #111111; border: 1px solid rgba(255, 255, 255, 0.1); }
+        .glass-panel-subtle { background-color: rgba(17, 17, 17, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); }
+        .floating-shadow { box-shadow: 0px 4px 12px rgba(0,0,0,0.5); }
+        .grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 24px 24px; }
+        .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+        .status-healthy { background-color: #4edea3; box-shadow: 0 0 8px rgba(78, 222, 163, 0.4); }
+        .status-warning { background-color: #ffb3ad; box-shadow: 0 0 8px rgba(255, 179, 173, 0.4); }
+        .nav-active { border-left: 2px solid #adc6ff; background-color: rgba(173, 198, 255, 0.05); }
+        .tech-border { border: 1px solid rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="flex h-screen overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
+<!-- Sidebar -->
+<aside class="w-[280px] flex-shrink-0 glass-panel h-full flex flex-col border-y-0 border-l-0 z-20">
+<div class="h-16 flex items-center px-6 border-b border-white/10">
+<span class="font-headline-sm text-headline-sm font-bold text-on-surface flex items-center gap-2">
+<span class="material-symbols-outlined text-primary">dynamic_form</span> OpsMind
+            </span>
+</div>
+<nav class="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+<div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Dashboard</h3>
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-primary font-medium rounded-DEFAULT nav-active" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">dashboard</span>
+                            Overview
+                        </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">smart_toy</span>
+                            AI Admin
+                        </a>
+</li>
+</ul>
+</div>
+<div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Infrastructure</h3>
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">lan</span>
+                            Topology
+                        </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">database</span>
+                            Storage
+                        </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">memory</span>
+                            Compute
+                        </a>
+</li>
+</ul>
+</div>
+<div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Operations</h3>
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">terminal</span>
+                            Terminal Logs
+                        </a>
+</li>
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">notifications</span>
+                            Incidents
+                        </a>
+</li>
+</ul>
+</div>
+<div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Configuration</h3>
+<ul class="space-y-1">
+<li>
+<a class="flex items-center gap-3 px-3 py-2 text-on-surface-variant hover:text-on-surface hover:bg-white/5 rounded-DEFAULT transition-colors" href="#">
+<span class="material-symbols-outlined">settings</span>
+                            Settings
+                        </a>
+</li>
+</ul>
+</div>
+</nav>
+<div class="p-4 border-t border-white/10">
+<div class="flex items-center gap-3 px-3 py-2">
+<div class="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center border border-white/10">
+<span class="font-label-caps text-label-caps text-on-surface">FA</span>
+</div>
+<div class="flex-1 min-w-0">
+<p class="font-body-md text-body-md text-on-surface truncate">Fatih</p>
+<p class="font-label-caps text-label-caps text-on-surface-variant truncate">Admin</p>
+</div>
+</div>
+</div>
+</aside>
+<!-- Main Content -->
+<main class="flex-1 flex flex-col min-w-0 relative grid-bg">
+<!-- Top Bar -->
+<header class="h-16 flex-shrink-0 glass-panel border-x-0 border-t-0 flex items-center justify-between px-gutter z-10">
+<div class="flex-1 max-w-xl">
+<div class="relative group">
+<span class="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-on-surface-variant group-focus-within:text-primary transition-colors">search</span>
+<input class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 pl-10 pr-4 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-on-surface-variant" placeholder="Ask OpsMind or search infrastructure..." type="text"/>
+<div class="absolute right-3 top-1/2 -translate-y-1/2 flex gap-1">
+<kbd class="hidden sm:inline-block font-code-md text-[10px] text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded border border-white/10">⌘</kbd>
+<kbd class="hidden sm:inline-block font-code-md text-[10px] text-on-surface-variant bg-surface-container px-1.5 py-0.5 rounded border border-white/10">K</kbd>
+</div>
+</div>
+</div>
+<div class="flex items-center gap-6">
+<div class="flex items-center gap-2">
+<span class="status-dot status-healthy"></span>
+<span class="font-label-caps text-label-caps text-on-surface">All systems healthy</span>
+</div>
+<div class="h-6 w-px bg-white/10"></div>
+<button class="text-on-surface-variant hover:text-on-surface transition-colors">
+<span class="material-symbols-outlined">help</span>
+</button>
+</div>
+</header>
+<!-- Dashboard Canvas -->
+<div class="flex-1 overflow-y-auto p-gutter custom-scrollbar">
+<div class="max-w-container-max mx-auto space-y-8">
+<!-- Header Section -->
+<section class="mb-12 mt-4">
+<h1 class="font-headline-md text-headline-md text-on-surface mb-2">Good evening, Fatih.</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant">Your infrastructure is healthy. OpsMind is monitoring 23 services.</p>
+</section>
+<!-- Bento Grid Layout -->
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+<!-- AI Admin Hero Card (Spans 8 cols) -->
+<div class="md:col-span-8 glass-panel rounded-lg p-6 relative overflow-hidden flex flex-col justify-between min-h-[240px]">
+<div class="absolute top-0 right-0 p-6">
+<div class="flex items-center gap-2 bg-surface-container px-3 py-1.5 rounded-full border border-white/10">
+<span class="material-symbols-outlined text-[16px] text-secondary">verified</span>
+<span class="font-label-caps text-label-caps text-secondary">AI Autonomy: Autonomous</span>
+</div>
+</div>
+<div class="z-10">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-12 h-12 rounded-lg bg-[#000000] border border-white/10 flex items-center justify-center">
+<span class="material-symbols-outlined text-primary text-3xl">smart_toy</span>
+</div>
+<div>
+<h2 class="font-headline-sm text-headline-sm text-on-surface">AI Admin Status</h2>
+<div class="flex items-center gap-2 mt-1">
+<span class="status-dot status-healthy"></span>
+<span class="font-code-md text-code-md text-on-surface-variant">Monitoring Active</span>
+</div>
+</div>
+</div>
+<div class="bg-[#000000] border border-white/10 rounded p-4 mt-auto">
+<div class="flex justify-between items-start mb-2">
+<span class="font-label-caps text-label-caps text-on-surface-variant">LAST ACTION</span>
+<span class="font-code-md text-[11px] text-on-surface-variant">4m ago</span>
+</div>
+<p class="font-body-md text-body-md text-on-surface">Jellyfin restarted successfully. Verified healthy.</p>
+</div>
+</div>
+</div>
+<!-- Needs Attention / Overall Health (Spans 4 cols) -->
+<div class="md:col-span-4 flex flex-col gap-6">
+<!-- Health Summary -->
+<div class="glass-panel rounded-lg p-5 flex-1">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Overall Health</h3>
+<div class="space-y-4">
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="status-dot status-healthy"></span>
+<span class="font-body-md text-body-md text-on-surface">Healthy</span>
+</div>
+<span class="font-code-md text-code-md text-on-surface">23</span>
+</div>
+<div class="flex justify-between items-center">
+<div class="flex items-center gap-2">
+<span class="status-dot status-warning"></span>
+<span class="font-body-md text-body-md text-on-surface">Attention</span>
+</div>
+<span class="font-code-md text-code-md text-on-surface">1</span>
+</div>
+<div class="flex justify-between items-center opacity-50">
+<div class="flex items-center gap-2">
+<span class="status-dot bg-error"></span>
+<span class="font-body-md text-body-md text-on-surface">Critical</span>
+</div>
+<span class="font-code-md text-code-md text-on-surface">0</span>
+</div>
+</div>
+</div>
+<!-- Needs Attention Alert -->
+<div class="glass-panel rounded-lg p-5 border-l-2 border-l-tertiary">
+<div class="flex items-start gap-3">
+<span class="material-symbols-outlined text-tertiary">warning</span>
+<div>
+<h3 class="font-body-md text-body-md font-medium text-on-surface mb-1">Needs Your Attention</h3>
+<p class="font-body-md text-body-md text-on-surface-variant mb-3">Media storage is 96% full.</p>
+<button class="font-label-caps text-label-caps text-tertiary border border-tertiary/30 px-3 py-1.5 rounded hover:bg-tertiary/10 transition-colors">Review</button>
+</div>
+</div>
+</div>
+</div>
+<!-- AI Activity Timeline (Spans 6 cols) -->
+<div class="md:col-span-6 glass-panel rounded-lg p-6 flex flex-col h-[320px]">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2 flex justify-between">
+<span>AI Activity Timeline</span>
+<span class="flex items-center gap-1 text-primary"><span class="w-2 h-2 rounded-full bg-primary animate-pulse"></span> Live</span>
+</h3>
+<div class="flex-1 overflow-y-auto pr-2 space-y-4">
+<!-- Timeline Item -->
+<div class="relative pl-6 pb-4 border-l border-white/10 last:border-0 last:pb-0">
+<div class="absolute left-[-5px] top-1 w-[9px] h-[9px] rounded-full bg-surface-container border-2 border-[#111111] ring-1 ring-white/20"></div>
+<div class="flex justify-between items-start mb-1">
+<span class="font-body-md text-body-md text-on-surface">Jellyfin Restart Initiated</span>
+<span class="font-code-md text-[11px] text-on-surface-variant">10:42 PM</span>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant">Automated response to memory leak detected on container <span class="font-code-md text-[11px] text-primary bg-primary/10 px-1 rounded">jf-core-01</span></p>
+</div>
+<!-- Timeline Item -->
+<div class="relative pl-6 pb-4 border-l border-white/10 last:border-0 last:pb-0">
+<div class="absolute left-[-5px] top-1 w-[9px] h-[9px] rounded-full bg-surface-container border-2 border-[#111111] ring-1 ring-white/20"></div>
+<div class="flex justify-between items-start mb-1">
+<span class="font-body-md text-body-md text-on-surface">Backup Routine Completed</span>
+<span class="font-code-md text-[11px] text-on-surface-variant">08:00 PM</span>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant">Daily snapshot of configs and databases stored to Backblaze B2.</p>
+</div>
+<!-- Timeline Item -->
+<div class="relative pl-6 pb-4 border-l border-white/10 last:border-0 last:pb-0 opacity-70">
+<div class="absolute left-[-5px] top-1 w-[9px] h-[9px] rounded-full bg-surface-container border-2 border-[#111111] ring-1 ring-white/20"></div>
+<div class="flex justify-between items-start mb-1">
+<span class="font-body-md text-body-md text-on-surface">Routine Scan</span>
+<span class="font-code-md text-[11px] text-on-surface-variant">06:00 PM</span>
+</div>
+<p class="font-body-md text-[13px] text-on-surface-variant">All 23 monitored services reported healthy.</p>
+</div>
+</div>
+</div>
+<!-- Infrastructure Map (Spans 6 cols) -->
+<div class="md:col-span-6 glass-panel rounded-lg p-6 flex flex-col h-[320px]">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Infrastructure Topology</h3>
+<div class="flex-1 bg-[#000000] rounded tech-border p-4 flex items-center justify-center relative overflow-hidden">
+<!-- Abstracted Node Graph -->
+<div class="relative w-full h-full max-w-[300px] flex items-center justify-center">
+<!-- Center Node (Unraid) -->
+<div class="absolute z-10 bg-[#111111] border border-primary/50 rounded-lg p-3 shadow-[0_0_15px_rgba(173,198,255,0.1)] flex flex-col items-center">
+<span class="material-symbols-outlined text-primary mb-1">dns</span>
+<span class="font-code-md text-[11px] text-on-surface">Unraid Core</span>
+</div>
+<!-- Connection Lines -->
+<svg class="absolute inset-0 w-full h-full" style="pointer-events: none;">
+<line stroke="rgba(255,255,255,0.1)" stroke-dasharray="4 4" stroke-width="1.5" x1="50%" x2="20%" y1="50%" y2="20%"></line>
+<line stroke="rgba(255,255,255,0.1)" stroke-dasharray="4 4" stroke-width="1.5" x1="50%" x2="80%" y1="50%" y2="80%"></line>
+</svg>
+<!-- Satellite Node 1 (Media) -->
+<div class="absolute top-[10%] left-[10%] bg-[#111111] border border-white/10 rounded p-2 flex flex-col items-center">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px] mb-1">movie</span>
+<span class="font-code-md text-[9px] text-on-surface-variant">Media Stack</span>
+</div>
+<!-- Satellite Node 2 (HA) -->
+<div class="absolute bottom-[10%] right-[10%] bg-[#111111] border border-white/10 rounded p-2 flex flex-col items-center">
+<span class="material-symbols-outlined text-on-surface-variant text-[18px] mb-1">home_iot_device</span>
+<span class="font-code-md text-[9px] text-on-surface-variant">Home Assistant</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Suggested Commands -->
+<section class="mt-8">
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4">Ask Your Administrator</h3>
+<div class="flex flex-wrap gap-3">
+<button class="glass-panel-subtle hover:bg-white/5 border border-white/10 px-4 py-2 rounded-full font-body-md text-body-md text-on-surface transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">chat_bubble</span>
+                            What's happening?
+                        </button>
+<button class="glass-panel-subtle hover:bg-white/5 border border-white/10 px-4 py-2 rounded-full font-body-md text-body-md text-on-surface transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">backup</span>
+                            Check my backups
+                        </button>
+<button class="glass-panel-subtle hover:bg-white/5 border border-white/10 px-4 py-2 rounded-full font-body-md text-body-md text-on-surface transition-colors flex items-center gap-2">
+<span class="material-symbols-outlined text-[16px] text-on-surface-variant">memory</span>
+                            Resource usage
+                        </button>
+</div>
+</section>
+</div>
+<!-- Minimal Footer Space -->
+<div class="h-24"></div>
+</div>
+</main>
+<style>
+        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); }
+    </style>
+</body></html>

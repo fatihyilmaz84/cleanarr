@@ -1,0 +1,8 @@
+{
+  "audio_keep_languages": ["eng", "tur"],
+  "subtitle_keep_languages": ["eng"],
+  "keep_untagged_language": true,
+  "always_keep_forced_subtitles": true,
+  "drop_commentary_tracks": true,
+  "drop_title_patterns": ["commentary", "sdh"]
+}

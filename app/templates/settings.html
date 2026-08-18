@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Settings — Cleanarr{% endblock %}
+{% block page_title %}Settings{% endblock %}
+{% block content %}
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Media Paths</h3>
+  <form method="post" action="/settings/media-paths" class="space-y-4">
+    <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">One path per line, as &lt;path&gt;,&lt;movie|tv&gt;</label>
+    <textarea name="paths" rows="4" class="w-full bg-[#050505] text-on-surface font-code-md text-code-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="/data/movies,movie&#10;/data/tvshows,tv">{% for p in media_paths %}{{ p.path }},{{ p.library_type }}
+{% endfor %}</textarea>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Paths</button>
+  </form>
+</div>
+
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Sonarr / Radarr</h3>
+  <p class="font-body-md text-body-md text-on-surface-variant mb-4">Used only to look up titles/posters for display — never writes anything back, never triggers a re-import.</p>
+  <form method="post" action="/settings/arr" class="space-y-4">
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Radarr URL</label>
+      <input name="radarr_url" value="{{ arr.radarr_url or '' }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="http://192.168.178.164:7878">
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Radarr API Key</label>
+      <input type="password" name="radarr_api_key" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="{{ 'unchanged — leave blank to keep' if arr.radarr_api_key else '' }}">
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Sonarr URL</label>
+      <input name="sonarr_url" value="{{ arr.sonarr_url or '' }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="http://192.168.178.164:8989">
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Sonarr API Key</label>
+      <input type="password" name="sonarr_api_key" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="{{ 'unchanged — leave blank to keep' if arr.sonarr_api_key else '' }}">
+    </div>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Connection</button>
+  </form>
+</div>
+{% endblock %}

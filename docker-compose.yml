@@ -1,0 +1,39 @@
+# Deployment notes (see also README.md):
+#
+# The container-side mount points below (/movies, /tv) intentionally match
+# Radarr's and Sonarr's OWN internal mount points for this same share
+# (confirmed via `docker inspect radarr` / `docker inspect sonarr` on Tower:
+# Radarr mounts /mnt/user/Arakli/Movies at /movies, Sonarr mounts
+# /mnt/user/Arakli/Shows at /tv). This has to match exactly, not just point
+# at the same files, because:
+#   1. Sonarr/Radarr report file paths from their own container's point of
+#      view (e.g. "/movies/Foo (2020)/Foo.mkv") — if Cleanarr mounted the
+#      same share at a different container path, its title/poster lookup
+#      would silently never match anything.
+#   2. Cleanarr's remux temp file is written into the same directory as the
+#      original so the final replace is atomic — that requires the whole
+#      share to be one bind mount, same as it is for the other containers.
+#
+# If you add more libraries later (music, etc.) or your paths differ from
+# what's below, check the real host path via the Unraid UI (Docker tab ->
+# container -> edit -> media path's "Host Path") or `docker inspect <name>`,
+# and mount it here at the same container path the other containers use.
+#
+# Note: this Unraid host doesn't have `docker compose`/`docker-compose`
+# installed — see README.md for the plain `docker build`/`docker run`
+# equivalent used for the actual deployment. This file is kept as the
+# canonical, documented definition in case a compose plugin is added later.
+
+services:
+  cleanarr:
+    build: .
+    container_name: cleanarr
+    restart: unless-stopped
+    ports:
+      - "8420:8420"
+    volumes:
+      - /mnt/user/appdata/cleanarr/config:/config
+      - /mnt/user/Arakli/Movies:/movies
+      - /mnt/user/Arakli/Shows:/tv
+    environment:
+      - CLEANARR_DB_PATH=/config/cleanarr.db

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Review Queue — Cleanarr{% endblock %}
+{% block page_title %}Review Queue{% endblock %}
+{% block content %}
+{% if items %}
+<div class="space-y-4">
+  {% for item in items %}
+  <div class="glass-panel rounded-lg p-5">
+    <div class="flex justify-between items-start mb-3">
+      <div>
+        <h3 class="font-body-lg text-body-lg text-on-surface">{{ item.display_title or item.path }}</h3>
+        <p class="font-code-md text-[11px] text-on-surface-variant mt-1">{{ item.path }}</p>
+      </div>
+      <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant h-fit">{{ item.library_type }}</span>
+    </div>
+    <div class="flex flex-wrap gap-2 mb-4">
+      {% for s in item.kept %}
+        <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded">KEEP {{ s.type }} {{ s.language or '?' }}</span>
+      {% endfor %}
+      {% for s in item.dropped %}
+        <span class="font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-1 rounded" title="{{ s.reason }}">DROP {{ s.type }} {{ s.language or '?' }}{% if s.title %} &quot;{{ s.title }}&quot;{% endif %}</span>
+      {% endfor %}
+    </div>
+    <div class="flex gap-3">
+      <form method="post" action="/review/{{ item.id }}/approve">
+        <button class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Approve &amp; Apply</button>
+      </form>
+      <form method="post" action="/review/{{ item.id }}/skip">
+        <button class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Skip</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="glass-panel rounded-lg p-8 text-center">
+  <p class="font-body-lg text-body-lg text-on-surface-variant">Nothing waiting for review.</p>
+  <p class="font-body-md text-body-md text-on-surface-variant mt-2">Run a scan, or check your <a href="/rules" class="text-primary">rules</a> if you expected results.</p>
+</div>
+{% endif %}
+{% endblock %}

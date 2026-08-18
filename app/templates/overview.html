@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Overview — Cleanarr{% endblock %}
+{% block page_title %}Overview{% endblock %}
+{% block content %}
+<section class="mb-4">
+  <h2 class="font-headline-md text-headline-md text-on-surface mb-2">Welcome back.</h2>
+  <p class="font-body-lg text-body-lg text-on-surface-variant">
+    {{ stats.total_files }} file(s) tracked, {{ stats.pending_review_count }} awaiting review.
+  </p>
+</section>
+
+<div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+    <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Pending Review</h3>
+    <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ stats.pending_review_count }}</p>
+    <a href="/review" class="font-label-caps text-label-caps text-primary mt-3 inline-block">Review now &rarr;</a>
+  </div>
+  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+    <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Space Reclaimed</h3>
+    <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ "%.2f"|format(stats.total_bytes_reclaimed / 1e9) }} GB</p>
+    <p class="font-body-md text-body-md text-on-surface-variant mt-1">across {{ stats.total_applied_count }} file(s)</p>
+  </div>
+  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+    <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Files Tracked</h3>
+    <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ stats.total_files }}</p>
+  </div>
+</div>
+
+<div class="glass-panel rounded-lg p-6">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Recent Activity</h3>
+  {% if recent_history %}
+  <div class="space-y-4">
+    {% for h in recent_history %}
+    <div class="relative pl-6 pb-4 border-l border-white/10 last:border-0 last:pb-0">
+      <div class="absolute left-[-5px] top-1 w-[9px] h-[9px] rounded-full bg-surface-container border-2 border-[#111111] ring-1 ring-white/20"></div>
+      <div class="flex justify-between items-start mb-1">
+        <span class="font-body-md text-body-md text-on-surface">{{ h.display_title or h.path }}</span>
+        <span class="font-code-md text-[11px] text-on-surface-variant">{{ h.applied_at.strftime("%b %d, %H:%M") }}</span>
+      </div>
+      <p class="font-body-md text-[13px] text-on-surface-variant">
+        Removed {{ h.streams_removed|length }} track(s), reclaimed {{ "%.1f"|format(h.bytes_reclaimed / 1e6) }}MB
+      </p>
+    </div>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="font-body-md text-body-md text-on-surface-variant">No changes applied yet.</p>
+  {% endif %}
+</div>
+{% endblock %}

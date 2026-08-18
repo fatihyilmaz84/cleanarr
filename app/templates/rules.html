@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Rules — Cleanarr{% endblock %}
+{% block page_title %}Rules{% endblock %}
+{% block content %}
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <form method="post" action="/rules" class="space-y-6">
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Audio languages to keep (comma-separated ISO 639-2 codes)</label>
+      <input name="audio_keep_languages" value="{{ rules.audio_keep_languages | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="e.g. eng, tur — empty means keep all languages">
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Subtitle languages to keep</label>
+      <input name="subtitle_keep_languages" value="{{ rules.subtitle_keep_languages | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="e.g. eng — empty means keep all languages">
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Drop title patterns (regex, comma-separated)</label>
+      <input name="drop_title_patterns" value="{{ rules.drop_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="e.g. commentary, sdh">
+    </div>
+    <div class="space-y-3">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="keep_untagged_language" {% if rules.keep_untagged_language %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Keep tracks with no language tag
+      </label>
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="always_keep_forced_subtitles" {% if rules.always_keep_forced_subtitles %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Always keep forced subtitles
+      </label>
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="drop_commentary_tracks" {% if rules.drop_commentary_tracks %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Drop commentary tracks
+      </label>
+    </div>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Rules</button>
+  </form>
+</div>
+{% if not rules.audio_keep_languages and not rules.subtitle_keep_languages %}
+<div class="glass-panel rounded-lg p-5 border-l-2 border-l-tertiary max-w-2xl">
+  <div class="flex items-start gap-3">
+    <span class="material-symbols-outlined text-tertiary">info</span>
+    <p class="font-body-md text-body-md text-on-surface-variant">No language filters configured yet — scans won't propose removing any tagged-language tracks until you set at least one language above. This is intentional: Cleanarr never touches files until you tell it what to keep.</p>
+  </div>
+</div>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}History — Cleanarr{% endblock %}
+{% block page_title %}History{% endblock %}
+{% block content %}
+{% if items %}
+<div class="glass-panel rounded-lg overflow-hidden overflow-x-auto">
+  <table class="w-full text-left">
+    <thead>
+      <tr class="border-b border-white/10">
+        <th class="font-label-caps text-label-caps text-on-surface-variant px-4 py-3">File</th>
+        <th class="font-label-caps text-label-caps text-on-surface-variant px-4 py-3">Applied</th>
+        <th class="font-label-caps text-label-caps text-on-surface-variant px-4 py-3">Removed</th>
+        <th class="font-label-caps text-label-caps text-on-surface-variant px-4 py-3">Reclaimed</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for h in items %}
+      <tr class="border-b border-white/10 last:border-0">
+        <td class="px-4 py-3">
+          <div class="font-body-md text-body-md text-on-surface">{{ h.display_title or h.path }}</div>
+          <div class="font-code-md text-[11px] text-on-surface-variant">{{ h.path }}</div>
+        </td>
+        <td class="px-4 py-3 font-code-md text-code-md text-on-surface-variant whitespace-nowrap">{{ h.applied_at.strftime("%Y-%m-%d %H:%M") }}</td>
+        <td class="px-4 py-3">
+          <div class="flex flex-wrap gap-1">
+            {% for s in h.streams_removed %}
+              <span class="font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-0.5 rounded">{{ s.type }} {{ s.language or '?' }}</span>
+            {% endfor %}
+          </div>
+        </td>
+        <td class="px-4 py-3 font-code-md text-code-md text-secondary whitespace-nowrap">{{ "%.1f"|format(h.bytes_reclaimed / 1e6) }}MB</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="glass-panel rounded-lg p-8 text-center">
+  <p class="font-body-lg text-body-lg text-on-surface-variant">No changes applied yet.</p>
+</div>
+{% endif %}
+{% endblock %}

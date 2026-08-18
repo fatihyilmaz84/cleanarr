@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>{% block title %}Cleanarr{% endblock %}</title>
+{% if auto_refresh %}<meta http-equiv="refresh" content="2">{% endif %}
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
+<script>
+    tailwind.config = {
+        darkMode: "class",
+        theme: {
+            extend: {
+                colors: {
+                    "error-container": "#93000a", "secondary-container": "#00a572", "background": "#12131a",
+                    "on-primary-fixed": "#001a42", "inverse-on-surface": "#2f3037", "surface-tint": "#adc6ff",
+                    "surface-container-highest": "#33343c", "outline": "#8c909f", "on-secondary-container": "#00311f",
+                    "surface-variant": "#33343c", "secondary": "#4edea3", "on-error": "#690005", "on-surface": "#e2e1eb",
+                    "inverse-primary": "#005ac2", "on-surface-variant": "#c2c6d6", "surface-container-low": "#1a1b22",
+                    "surface": "#12131a", "tertiary-fixed": "#ffdad7", "primary-fixed": "#d8e2ff",
+                    "on-tertiary-fixed-variant": "#930013", "tertiary": "#ffb3ad", "on-primary-fixed-variant": "#004395",
+                    "surface-container-lowest": "#0c0e14", "primary-container": "#4d8eff", "inverse-surface": "#e2e1eb",
+                    "primary": "#adc6ff", "on-secondary-fixed-variant": "#005236", "tertiary-fixed-dim": "#ffb3ad",
+                    "on-primary-container": "#00285d", "on-tertiary-fixed": "#410004", "secondary-fixed": "#6ffbbe",
+                    "on-background": "#e2e1eb", "outline-variant": "#424754", "surface-dim": "#12131a",
+                    "tertiary-container": "#ff5451", "on-error-container": "#ffdad6", "surface-container-high": "#282a31",
+                    "on-secondary-fixed": "#002113", "on-tertiary": "#68000a", "surface-container": "#1e1f26",
+                    "on-tertiary-container": "#5c0008", "on-secondary": "#003824", "on-primary": "#002e6a",
+                    "surface-bright": "#383940", "secondary-fixed-dim": "#4edea3", "error": "#ffb4ab",
+                    "primary-fixed-dim": "#adc6ff"
+                },
+                borderRadius: { DEFAULT: "0.125rem", lg: "0.25rem", xl: "0.5rem", full: "0.75rem" },
+                spacing: { "container-max": "1440px", unit: "4px", margin: "32px", gutter: "24px" },
+                fontFamily: {
+                    "headline-md": ["Geist"], "body-md": ["Inter"], "label-caps": ["Inter"], "code-md": ["JetBrains Mono"],
+                    "headline-sm": ["Geist"], "display-lg": ["Geist"], "body-lg": ["Inter"]
+                },
+                fontSize: {
+                    "headline-md": ["32px", { lineHeight: "1.2", letterSpacing: "-0.01em", fontWeight: "500" }],
+                    "body-md": ["14px", { lineHeight: "1.5", fontWeight: "400" }],
+                    "label-caps": ["11px", { lineHeight: "1", letterSpacing: "0.05em", fontWeight: "600" }],
+                    "code-md": ["13px", { lineHeight: "1.6", fontWeight: "400" }],
+                    "headline-sm": ["24px", { lineHeight: "1.3", fontWeight: "500" }],
+                    "display-lg": ["48px", { lineHeight: "1.1", letterSpacing: "-0.02em", fontWeight: "600" }],
+                    "body-lg": ["18px", { lineHeight: "1.6", fontWeight: "400" }]
+                }
+            }
+        }
+    }
+</script>
+<style>
+    body { background-color: #050505; color: #e2e1eb; font-family: 'Inter', sans-serif; }
+    .glass-panel { background-color: #111111; border: 1px solid rgba(255, 255, 255, 0.1); }
+    .glass-panel-subtle { background-color: rgba(17, 17, 17, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); }
+    .floating-shadow { box-shadow: 0px 4px 12px rgba(0,0,0,0.5); }
+    .grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 24px 24px; }
+    .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 8px; }
+    .status-healthy { background-color: #4edea3; box-shadow: 0 0 8px rgba(78, 222, 163, 0.4); }
+    .status-warning { background-color: #ffb3ad; box-shadow: 0 0 8px rgba(255, 179, 173, 0.4); }
+    .status-active { background-color: #adc6ff; box-shadow: 0 0 8px rgba(173, 198, 255, 0.5); }
+    .nav-active { border-left: 2px solid #adc6ff; background-color: rgba(173, 198, 255, 0.05); }
+    .tech-border { border: 1px solid rgba(255,255,255,0.1); }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background: #33343c; border-radius: 3px; }
+</style>
+</head>
+<body class="flex h-screen overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
+{% macro nav_link(href, icon, label, badge=None) %}
+<li>
+  <a href="{{ href }}" class="flex items-center gap-3 px-3 py-2 rounded-DEFAULT transition-colors {{ 'text-primary font-medium nav-active' if request.url.path == href else 'text-on-surface-variant hover:text-on-surface hover:bg-white/5' }}">
+    <span class="material-symbols-outlined">{{ icon }}</span>
+    <span class="flex-1">{{ label }}</span>
+    {% if badge %}<span class="font-code-md text-[11px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{{ badge }}</span>{% endif %}
+  </a>
+</li>
+{% endmacro %}
+<aside class="w-[280px] flex-shrink-0 glass-panel h-full flex flex-col border-y-0 border-l-0 z-20">
+  <div class="h-16 flex items-center px-6 border-b border-white/10">
+    <span class="font-headline-sm text-headline-sm font-bold text-on-surface flex items-center gap-2">
+      <span class="material-symbols-outlined text-primary">movie_filter</span> Cleanarr
+    </span>
+  </div>
+  <nav class="flex-1 overflow-y-auto py-6 px-4 space-y-8">
+    <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Dashboard</h3>
+      <ul class="space-y-1">
+        {{ nav_link("/", "dashboard", "Overview") }}
+      </ul>
+    </div>
+    <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Library</h3>
+      <ul class="space-y-1">
+        {{ nav_link("/review", "fact_check", "Review Queue", badge=pending_review_count) }}
+        {{ nav_link("/history", "history", "History") }}
+      </ul>
+    </div>
+    <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Configuration</h3>
+      <ul class="space-y-1">
+        {{ nav_link("/rules", "tune", "Rules") }}
+        {{ nav_link("/settings", "settings", "Settings") }}
+      </ul>
+    </div>
+  </nav>
+  <div class="p-4 border-t border-white/10">
+    <div class="flex items-center gap-3 px-3 py-2">
+      <div class="w-8 h-8 rounded-full bg-surface-container-high flex items-center justify-center border border-white/10">
+        <span class="material-symbols-outlined text-[18px] text-on-surface-variant">dns</span>
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="font-body-md text-body-md text-on-surface truncate">Tower</p>
+        <p class="font-label-caps text-label-caps text-on-surface-variant truncate">Unraid</p>
+      </div>
+    </div>
+  </div>
+</aside>
+<main class="flex-1 flex flex-col min-w-0 relative grid-bg">
+  <header class="h-16 flex-shrink-0 glass-panel border-x-0 border-t-0 flex items-center justify-between px-gutter z-10">
+    <h1 class="font-headline-sm text-headline-sm text-on-surface">{% block page_title %}{% endblock %}</h1>
+    <div class="flex items-center gap-6">
+      {% if current_job %}
+        <div class="flex items-center gap-2">
+          <span class="status-dot status-active animate-pulse"></span>
+          <span class="font-label-caps text-label-caps text-on-surface">{{ current_job.kind|capitalize }} running&hellip;</span>
+        </div>
+      {% else %}
+        <div class="flex items-center gap-2">
+          <span class="status-dot status-healthy"></span>
+          <span class="font-label-caps text-label-caps text-on-surface">Idle</span>
+        </div>
+      {% endif %}
+      <div class="h-6 w-px bg-white/10"></div>
+      <form method="post" action="/scan">
+        <button type="submit" class="flex items-center gap-2 bg-primary text-on-primary font-label-caps text-label-caps px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">
+          <span class="material-symbols-outlined text-[16px]">radar</span> Scan Now
+        </button>
+      </form>
+    </div>
+  </header>
+  <div class="flex-1 overflow-y-auto p-gutter custom-scrollbar">
+    <div class="max-w-container-max mx-auto space-y-8 pb-16">
+      {% if messages %}
+        <div class="space-y-2">
+          {% for m in messages %}
+            <div class="glass-panel rounded-lg px-4 py-3 border-l-2 border-l-secondary font-body-md text-body-md text-on-surface">{{ m }}</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </div>
+  </div>
+</main>
+</body>
+</html>
