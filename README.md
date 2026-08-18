@@ -46,3 +46,7 @@ library:
 python scripts/cli.py --rules scripts/example-rules.json /path/to/movie.mkv
 python scripts/cli.py --rules scripts/example-rules.json --apply /path/to/movie.mkv
 ```
+
+## License
+
+GPLv3 — see [LICENSE](LICENSE).
