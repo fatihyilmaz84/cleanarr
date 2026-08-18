@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Normalize Queue — Cleanarr{% endblock %}
+{% block page_title %}Normalize Queue{% endblock %}
+{% block content %}
+{% if items %}
+<div class="glass-panel rounded-lg p-4 flex items-center justify-between">
+  <span class="font-body-md text-body-md text-on-surface-variant">{{ items|length }} file(s) queued, nothing written yet.</span>
+  <form method="post" action="/normalize/queue/run">
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Run Normalize Queue ({{ items|length }})</button>
+  </form>
+</div>
+<div class="space-y-4">
+  {% for item in items %}
+  <div class="glass-panel rounded-lg p-5">
+    <div class="flex justify-between items-start mb-3">
+      <div>
+        <h3 class="font-body-lg text-body-lg text-on-surface">{{ item.display_title or item.path }}</h3>
+        <p class="font-code-md text-[11px] text-on-surface-variant mt-1">{{ item.path }}</p>
+      </div>
+      <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant h-fit">{{ item.library_type }}</span>
+    </div>
+    <div class="flex flex-wrap gap-2 mb-4">
+      {% for c in item.changes %}
+        <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded" title="{{ c.reason }}">{{ c.codec_type }}: &quot;{{ c.old_title or '' }}&quot; &rarr; &quot;{{ c.new_title }}&quot;</span>
+      {% endfor %}
+    </div>
+    <form method="post" action="/normalize/queue/{{ item.id }}/remove">
+      <button type="submit" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Remove from Queue</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="glass-panel rounded-lg p-8 text-center">
+  <p class="font-body-lg text-body-lg text-on-surface-variant">Nothing queued.</p>
+  <p class="font-body-md text-body-md text-on-surface-variant mt-2">Add items from <a href="/normalize" class="text-primary">Normalize</a> — pick which tracks to rename, then "Add to Normalize Queue". Queue up as many as you like, then come back here and run them together.</p>
+</div>
+{% endif %}
+{% endblock %}

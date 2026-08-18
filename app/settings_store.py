@@ -12,6 +12,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import AppSetting
+from app.normalizer import NormalizerConfig
 from app.rules import RuleConfig
 
 RULES_KEY = "rules"
@@ -19,6 +20,7 @@ MEDIA_PATHS_KEY = "media_paths"
 ARR_CONFIG_KEY = "arr_config"
 DISPLAY_SETTINGS_KEY = "display_settings"
 SCHEDULES_KEY = "schedules"
+NORMALIZER_CONFIG_KEY = "normalizer_config"
 
 
 class ArrConfig(BaseModel):
@@ -135,3 +137,12 @@ async def get_schedules(session: AsyncSession) -> list[Schedule]:
 
 async def set_schedules(session: AsyncSession, schedules: list[Schedule]) -> None:
     await _set(session, SCHEDULES_KEY, {"schedules": [s.model_dump() for s in schedules]})
+
+
+async def get_normalizer_config(session: AsyncSession) -> NormalizerConfig:
+    data = await _get(session, NORMALIZER_CONFIG_KEY)
+    return NormalizerConfig.model_validate(data) if data else NormalizerConfig()
+
+
+async def set_normalizer_config(session: AsyncSession, config: NormalizerConfig) -> None:
+    await _set(session, NORMALIZER_CONFIG_KEY, config.model_dump())

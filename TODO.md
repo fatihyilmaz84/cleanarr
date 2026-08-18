@@ -196,13 +196,14 @@ SVG/PNG country flags) as the icon source, requested directly.
       the existing text, never a replacement for it (accessibility, and
       several languages share a plausible flag).
 
-## 7. Track metadata normalizer (Jellyfin + Plex naming/metadata consistency)
+## 7. Track metadata normalizer (Jellyfin + Plex naming/metadata consistency) — MVP done ✅
 
-Full spec supplied by the user 2026-08-19 — copied in spirit below, broken
-into sub-tasks with notes on what already exists vs. what's genuinely new.
-This is a substantially bigger feature than #5 above (which only decides
-*keep vs. drop*) — this one *rewrites* track titles/language/disposition
-metadata to a consistent scheme, for both Jellyfin and Plex.
+Full spec supplied by the user 2026-08-19. This is a substantially bigger
+feature than #5 above (which only decides *keep vs. drop*) — this one
+*rewrites* track titles/language/default-flag metadata to a consistent
+scheme. A working, tested MVP shipped 2026-08-19 covering the core
+proposal; several spec items are deliberately deferred (see "Still open"
+below) rather than block on the whole spec at once.
 
 ### Architecture — resolved 2026-08-19
 - **Separate menu item**, not folded into Rules/Review/Queue — its own nav
@@ -253,74 +254,115 @@ metadata to a consistent scheme, for both Jellyfin and Plex.
   removed per file; would need a `titles_changed`-style field alongside
   `streams_removed` for rename operations.
 
-### Genuinely new work
-- [ ] **New nav item + page(s)** — `app/templates/base.html`'s nav_link
-      list gets a "Normalizer" entry (own icon/section, likely under
-      "Library" alongside Review/Queue/History) and its own
-      propose -> approve -> apply page flow, separate from Rules/Review.
-- [ ] **Title/metadata rewriting itself** — `app/remux.py`'s
-      `build_ffmpeg_command` only ever does `-map` (keep/drop); it never
-      sets `-metadata:s:i:title=...`, `-metadata:s:i:language=...`, or
-      `-disposition:s:i:...`. This is the core new capability everything
-      else depends on.
-      **Performance note, resolved 2026-08-19**: a pure-ffmpeg approach
-      (`-c copy` + new `-metadata`/`-disposition` flags) is just as slow as
-      today's track removal — it's still a full read+write of the whole
-      file, since `-c copy` never skips the I/O, only the re-encode. For
-      **MKV specifically**, prefer `mkvpropedit` (MKVToolNix) instead: it
-      rewrites the Matroska header/track-metadata section in place,
-      without touching the multi-GB media payload at all — near-instant
-      regardless of file size, vs. minutes for a full remux. Modern
-      Matroska has native fields for exactly what this needs
-      (`FlagOriginal`, `FlagCommentary`, `FlagHearingImpaired`, track
-      name, language), no remux required for pure metadata changes. New
-      system dependency (`mkvtoolnix` package, alongside `ffmpeg` in the
-      Dockerfile) but a small one. Doesn't help non-MKV containers
-      (MP4/MOV don't guarantee in-place header edits the same way) — use
-      the ffmpeg remux path as the fallback for those, and note the speed
-      difference to the user per-file so a mixed-format library doesn't
-      look inconsistently slow for no visible reason.
-- [ ] Per-track normalization-vs-removal exclusivity (see Architecture
-      above) — needs the drop pass resolved and any normalize-selected
-      tracks force-kept *before* the final `-map`/`-metadata` ffmpeg
-      command (or `mkvpropedit` call) is assembled, so the two operations
-      combine into one pass rather than requiring two separate file
-      rewrites.
-- [ ] Naming-style setting (`Language - Attribute` vs `Language Attribute`
-      vs bracketed, etc.) as a new `RuleConfig`/settings field, applied
-      library-wide — one canonical scheme, not per-file.
-- [ ] Per-category preserve/strip toggles: preserve meaningful existing
-      titles, strip codec/channel/bitrate info, preserve
-      Original/Dubbed/Commentary/Descriptive-Audio labels.
-- [ ] Preferred-language auto-default selection (audio + subtitle,
-      separately configurable) — with "never put 'Default' in the title
-      itself, it's disposition metadata" as a hard rule.
-- [ ] Forced/Foreign/Forced Narrative/Signs & Songs equivalence — opt-in
-      only, off means treated as genuinely distinct (matches this app's
-      existing philosophy of never assuming an aggressive default).
-- [ ] Detection priority order (container metadata > track language >
-      forced/default/SDH flags > existing title > filename > external
-      convention) — already the shape of #5's disposition-then-title-regex
-      approach; extend the same pattern rather than inventing a new one.
+### What's built (2026-08-19)
+- [x] **New nav item + pages** — `app/templates/base.html` gained a
+      "Normalizer" nav section (Normalize / Normalize Queue) and a
+      "Normalize Settings" entry under Configuration, entirely separate
+      from Rules/Review/Queue. Three new templates
+      (`normalize.html`/`normalize_queue.html`/`normalize_settings.html`)
+      and a dedicated router (`app/normalize_web.py`, mounted in
+      `main.py`) rather than folding into `app/web.py`, which was already
+      large.
+- [x] **Title/metadata rewriting via `mkvpropedit`** (`app/mkv_metadata.py`)
+      — per the performance note below, MKV-only for now. Builds one
+      `mkvpropedit --edit track:aN/sN/vN --set name=... --set
+      language=... --set flag-default=...` invocation per file, only for
+      tracks that actually changed. Track selectors are computed
+      type-relative (`a1`, `s2`, ...) rather than using ffprobe's global
+      stream index, since Matroska attachments/chapters can make bare
+      positional numbering diverge between the two tools — a real
+      correctness risk if gotten wrong (could silently retag the wrong
+      track).
+- [x] **Pure decision logic** (`app/normalizer.py`, mirrors `app/rules.py`'s
+      split from I/O) — `NormalizerConfig` + `normalize_streams()`.
+      Detects language (via `app/languages.py`, extended with a new
+      `language_name_for_code()` reverse lookup), forced (disposition +
+      opt-in Foreign/Forced Narrative/Signs & Songs equivalence patterns),
+      SDH (disposition + title patterns), CC (title patterns, SDH takes
+      priority if both somehow match), commentary, original, and dubbed
+      (all title-pattern-based, same mechanism as #5's
+      commentary/hearing-impaired patterns, but a fully separate
+      `NormalizerConfig` instance — the two systems stay decoupled per the
+      Architecture note above). Builds canonical titles in two naming
+      styles (`English - SDH` / `English SDH`). Auto-default selection
+      picks one track per type and explicitly clears the flag on every
+      other candidate of that type (not just the chosen one), so exactly
+      one ends up default — an early draft of this had a bug here, caught
+      by `tests/test_normalizer.py`. An unrecognized/untagged language
+      code is left untouched rather than guessed.
+- [x] **Per-track exclusivity, implemented** — `app/normalize_service.py`'s
+      `propose_normalizations()` excludes any stream index
+      `app/rules.py`'s drop engine currently proposes removing for that
+      file (checking `PendingChange.proposed`/`overrides`, both `pending`
+      and `approved` status). The reverse (normalize-selected track
+      protected from removal) is *not* wired up on the rules.py side yet
+      — right now a track queued for normalization could still get
+      dropped by a later scan if Rules independently decides to remove
+      it. Follow-up, not done in this pass.
+- [x] **DB-touching orchestration** (`app/normalize_service.py`) —
+      `propose_normalizations()` reads already-scanned
+      `MediaFile`/`StreamRecord` rows (no ffprobe re-run — the normalizer
+      is a pure function of data the regular scan already collected) and
+      upserts `NormalizationChange` rows (new table, mirrors
+      `PendingChange`'s status machine: pending -> approved -> applied,
+      or skipped/failed). `apply_normalization_change()` re-decides from
+      scratch against current streams/config at apply time (never trusts
+      the cached proposal, same reasoning as `app/apply.py`), applies
+      per-track overrides, and writes the result back into `StreamRecord`
+      so a future pass sees the file as already-normalized.
+- [x] Job wiring (`app/actions.py`: `submit_normalize_scan_job`,
+      `submit_normalize_apply_job`) reusing the existing `JobManager`/
+      progress-bar infrastructure — new job kinds `normalize_scan` /
+      `normalize_apply`.
+- [x] **Naming-style, preserve/strip via canonical regeneration** — rather
+      than editing existing titles in place (fuzzy "is this meaningful"
+      judgment calls), the normalizer always *builds* a fresh canonical
+      title from detected attributes. This sidesteps the spec's separate
+      "preserve meaningful titles" / "strip technical info" toggles
+      entirely — there's nothing to strip or preserve from, since
+      codec/channel/bitrate info was never carried into the generated
+      title to begin with. Simpler and more predictable than the
+      toggle-based approach; revisit only if real libraries show a case
+      where blanket regeneration loses something worth keeping.
+- [x] `Dockerfile` installs `mkvtoolnix` (CLI package, no Qt/GUI deps)
+      alongside `ffmpeg`.
+- [x] Tests: `tests/test_normalizer.py` (21, pure logic incl. the
+      auto-default bug above), `tests/test_mkv_metadata.py` (9, command
+      building + subprocess mocking), `tests/test_normalize_service.py`
+      (7, incl. both directions of the drop/normalize interaction),
+      `tests/test_normalize_web.py` (6, full scan -> approve -> queue ->
+      run flow).
+
+### Still open (deliberately deferred, not forgotten)
+- [ ] **Non-MKV fallback** — MP4/MOV/etc. currently just fail with "only
+      MKV files are supported for normalization right now"
+      (`apply_normalization_change`). An ffmpeg-remux fallback is
+      possible but slow (see performance note) and wasn't worth blocking
+      the MKV path on.
+- [ ] **Reverse per-track exclusivity** — protecting a normalize-queued
+      track from a *later* independent Rules decision to drop it (see
+      above). Today the exclusion only runs at `propose_normalizations()`
+      time, one direction.
 - [ ] Ambiguous-track flagging, separate from confident matches, in the
-      Review UI.
+      Normalize UI — everything today is either a confident proposal or
+      silently left alone; no explicit "not sure" state.
 - [ ] **Jellyfin vs. Plex research** — needs actual investigation (not
       guessing) into where the two disagree on interpreting
-      forced/default/SDH container metadata, particularly for MKV. Until
-      that's done, "apply the safest common representation + report the
-      incompatibility, never silently discard" can't be implemented
-      correctly.
-- [ ] Target-server setting (Jellyfin / Plex / Both) — per the spec, avoid
-      generating different metadata for the two unless the research above
-      finds a real conflict; default to whatever's provably safe for both.
-
-### Suggested approach when this gets picked up
-Land the ffmpeg metadata-rewriting capability and a single naming
-convention first (small, testable in isolation via `scripts/cli.py`
-against real files, same as the original remux work) before layering the
-Jellyfin/Plex-specific research and the dual-purpose Review UI on top —
-this is large enough to warrant its own multi-session pass, not a single
-sitting.
+      forced/default/SDH container metadata. The current implementation
+      writes standard Matroska fields (`flag-default`, track `name`,
+      `language`) that both are expected to read the same way, but the
+      spec's "apply the safest common representation + report the
+      incompatibility" for cases where they *don't* agree isn't
+      implemented — no known conflict has been identified yet to encode.
+- [ ] Target-server setting (Jellyfin / Plex / Both) from the original
+      spec — not added; everything written today is the
+      provably-common-ground representation, so the setting has no
+      effect to control yet. Add once the research above finds a real
+      divergence worth switching on.
+- [ ] Descriptive-audio detection ("Descriptive Audio" from the spec's
+      examples) — not implemented; no title-pattern config for it yet.
+- [ ] Filters on the Normalize page (search/library-type/etc., like
+      Review gained) — not added in this pass, kept deliberately simple.
 
 ## Suggested order
 
@@ -333,7 +375,9 @@ sitting.
    drop_hearing_impaired_tracks rule); display cleanup and a canonical-name
    table deliberately left open, not worth it yet.
 6. **Flag icons (6)** — small, self-contained, mostly a vendoring +
-   language-to-flag mapping exercise.
-7. **Track metadata normalizer (7)** — the big one; needs the scope
-   clarification above resolved first, then the ffmpeg metadata-rewrite
-   capability before anything else in that section can land.
+   language-to-flag mapping exercise. Still open.
+7. ~~Track metadata normalizer (7)~~ — MVP done (MKV via mkvpropedit,
+   separate menu item, per-track exclusion from the drop engine). Still
+   open within it: non-MKV fallback, the reverse exclusion direction,
+   Jellyfin/Plex divergence research, target-server setting, ambiguous-
+   track UI, descriptive-audio detection, Normalize page filters.

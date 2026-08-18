@@ -152,3 +152,26 @@ LANGUAGE_OPTIONS: list[tuple[str, str]] = [
     ("Armenian", "arm"),
     ("Georgian", "geo"),
 ]
+
+
+def _build_code_to_name() -> dict[str, str]:
+    # Built from LANGUAGE_OPTIONS (not the alias dict directly) so aliases
+    # like Cantonese/Mandarin never displace Chinese as the canonical name
+    # for a shared code — LANGUAGE_OPTIONS deliberately excludes them.
+    mapping: dict[str, str] = {}
+    for name, _primary_code in LANGUAGE_OPTIONS:
+        for code in iso_codes_for_language_name(name):
+            mapping.setdefault(code, name)
+    return mapping
+
+
+_CODE_TO_NAME: dict[str, str] = _build_code_to_name()
+
+
+def language_name_for_code(code: str | None) -> str | None:
+    """Reverse of iso_codes_for_language_name: "eng" -> "English". None for
+    an unrecognized or unset code — never guesses.
+    """
+    if not code:
+        return None
+    return _CODE_TO_NAME.get(code.strip().lower())

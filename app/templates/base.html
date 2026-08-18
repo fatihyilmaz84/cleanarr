@@ -99,9 +99,17 @@
       </ul>
     </div>
     <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Normalizer</h3>
+      <ul class="space-y-1">
+        {{ nav_link("/normalize", "label", "Normalize", badge=normalize_pending_count) }}
+        {{ nav_link("/normalize/queue", "playlist_add_check", "Normalize Queue", badge=normalize_queued_count) }}
+      </ul>
+    </div>
+    <div>
       <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Configuration</h3>
       <ul class="space-y-1">
         {{ nav_link("/rules", "tune", "Rules") }}
+        {{ nav_link("/normalize/settings", "text_fields", "Normalize Settings") }}
         {{ nav_link("/schedule", "schedule", "Schedule") }}
         {{ nav_link("/settings", "settings", "Settings") }}
       </ul>

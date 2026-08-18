@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block title %}Normalize Settings — Cleanarr{% endblock %}
+{% block page_title %}Normalize Settings{% endblock %}
+{% block content %}
+<div class="glass-panel rounded-lg p-5 border-l-2 border-l-tertiary max-w-2xl">
+  <div class="flex items-start gap-3">
+    <span class="material-symbols-outlined text-tertiary">info</span>
+    <p class="font-body-md text-body-md text-on-surface-variant">The normalizer renames/retags audio and subtitle tracks to one consistent scheme — it never removes tracks (that's Rules) and, for now, only edits <span class="font-code-md">.mkv</span> files, using <span class="font-code-md">mkvpropedit</span> to rewrite the container's metadata in place. That's why it's near-instant, unlike Rules' remux — it never touches the actual audio/video/subtitle data.</p>
+  </div>
+</div>
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <form method="post" action="/normalize/settings" class="space-y-6">
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Naming style</label>
+      <select name="naming_style" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        <option value="dash" {% if config.naming_style == "dash" %}selected{% endif %}>English - SDH</option>
+        <option value="space" {% if config.naming_style == "space" %}selected{% endif %}>English SDH</option>
+      </select>
+      <p class="font-body-md text-body-md text-on-surface-variant mt-1">Applied library-wide — one canonical scheme, not per-file.</p>
+    </div>
+
+    <div class="flex gap-4">
+      <div class="flex-1">
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Preferred audio language</label>
+        <input name="preferred_audio_language" value="{{ config.preferred_audio_language }}" placeholder="e.g. English" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+      <div class="flex-1">
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Preferred subtitle language</label>
+        <input name="preferred_subtitle_language" value="{{ config.preferred_subtitle_language }}" placeholder="e.g. English" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+    </div>
+
+    <div class="space-y-3">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="auto_default_audio" {% if config.auto_default_audio %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Automatically make the preferred-language audio track the default
+      </label>
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="auto_default_subtitle" {% if config.auto_default_subtitle %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Automatically make the preferred-language subtitle track the default
+      </label>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">"Default" is always real track metadata, never added to the title text itself.</p>
+    </div>
+
+    <div class="space-y-3 border-t border-white/10 pt-6">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="forced_equivalents_enabled" {% if config.forced_equivalents_enabled %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Treat Foreign / Forced Narrative / Signs &amp; Songs as equivalent to Forced
+      </label>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">Off by default — these are only assumed equivalent to a real "forced" disposition flag if you turn this on.</p>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Forced-equivalent title patterns (regex, comma-separated)</label>
+        <input name="forced_equivalent_patterns" value="{{ config.forced_equivalent_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+    </div>
+
+    <div class="space-y-4 border-t border-white/10 pt-6">
+      <p class="font-label-caps text-label-caps text-on-surface-variant">Detection patterns (regex, comma-separated) — matched against a track's existing title when its container disposition flag doesn't already say so</p>
+      <div>
+        <label class="font-body-md text-body-md text-on-surface block mb-2">Commentary</label>
+        <input name="commentary_title_patterns" value="{{ config.commentary_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+      <div>
+        <label class="font-body-md text-body-md text-on-surface block mb-2">Hearing-impaired (SDH)</label>
+        <input name="hearing_impaired_title_patterns" value="{{ config.hearing_impaired_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+      <div>
+        <label class="font-body-md text-body-md text-on-surface block mb-2">CC (closed captions)</label>
+        <input name="cc_title_patterns" value="{{ config.cc_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        <p class="font-body-md text-[13px] text-on-surface-variant mt-1">SDH takes priority if a track somehow matches both — the two labels are never combined.</p>
+      </div>
+      <div>
+        <label class="font-body-md text-body-md text-on-surface block mb-2">Original</label>
+        <input name="original_title_patterns" value="{{ config.original_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+      <div>
+        <label class="font-body-md text-body-md text-on-surface block mb-2">Dubbed</label>
+        <input name="dubbed_title_patterns" value="{{ config.dubbed_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+    </div>
+
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Normalizer Settings</button>
+  </form>
+</div>
+{% endblock %}

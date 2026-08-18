@@ -22,7 +22,7 @@ from app.deps import get_session
 from app.jobs import JobManager
 from app.languages import LANGUAGE_OPTIONS, iso_codes_for_language_name
 from app.models import ChangeStatus, PendingChange
-from app.queries import list_history_items, list_review_items, overview_stats
+from app.queries import list_history_items, list_review_items, normalize_stats, overview_stats
 from app.rules import RuleConfig
 from app.settings_store import (
     ArrConfig,
@@ -80,6 +80,7 @@ def _current_job(job_manager: JobManager) -> dict | None:
 async def _base_context(request: Request, session: AsyncSession) -> dict:
     job_manager: JobManager = request.app.state.job_manager
     stats = await overview_stats(session)
+    norm_stats = await normalize_stats(session)
     msg = request.query_params.get("msg")
     current_job = _current_job(job_manager)
     display_settings = await get_display_settings(session)
@@ -87,6 +88,8 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
         "request": request,
         "pending_review_count": stats["pending_review_count"],
         "queued_count": stats["queued_count"],
+        "normalize_pending_count": norm_stats["pending_count"],
+        "normalize_queued_count": norm_stats["queued_count"],
         "current_job": current_job,
         "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],

@@ -193,11 +193,13 @@ def _make_lifespan(db_path: Path | None):
 
 
 def create_app(db_path: Path | None = None) -> FastAPI:
+    from app.normalize_web import normalize_router  # local import: avoids a circular import with app.actions
     from app.web import web_router  # local import: avoids a circular import with app.actions
 
     app = FastAPI(title="Cleanarr", lifespan=_make_lifespan(db_path))
     app.include_router(router)
     app.include_router(web_router)
+    app.include_router(normalize_router)
     return app
 
 

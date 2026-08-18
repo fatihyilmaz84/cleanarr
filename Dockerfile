@@ -1,8 +1,11 @@
 FROM python:3.12-slim
 
-# ffmpeg provides both `ffmpeg` and `ffprobe` — the only external tools this
-# app depends on. Everything else (rule engine, DB, job queue) is pure Python.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+# ffmpeg provides `ffmpeg`/`ffprobe` for the rule-based remover (app/remux.py).
+# mkvtoolnix provides `mkvpropedit` for the metadata normalizer
+# (app/mkv_metadata.py) — it rewrites an MKV's track metadata in place
+# without touching the media payload, so normalizing is near-instant
+# instead of a full remux. CLI-only package, no GUI/Qt dependencies pulled in.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg mkvtoolnix \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

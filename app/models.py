@@ -83,6 +83,33 @@ class PendingChange(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class NormalizationChange(SQLModel, table=True):
+    """A proposed set of track title/language/default-flag rewrites for one
+    file — the normalizer's equivalent of PendingChange, but a separate
+    table since it's a separate, independent system (see app/normalizer.py
+    and TODO.md #7). Reuses ChangeStatus's states for the same reasons
+    PendingChange does: pending (proposed) -> approved (queued) -> applied,
+    or skipped/failed.
+    """
+
+    __tablename__ = "normalization_changes"
+
+    id: int | None = Field(default=None, primary_key=True)
+    file_id: int = Field(foreign_key="media_files.id", index=True)
+    status: ChangeStatus = ChangeStatus.pending
+    # Serialized list of {index, codec_type, track_selector, old_title,
+    # new_title, old_language, new_language, old_default, new_default,
+    # changed, reason} — see app/normalizer.py::TrackNormalization.
+    proposed: list = Field(default_factory=list, sa_column=Column(JSON))
+    # Stream indices the user chose to leave untouched at approval time,
+    # despite the normalizer proposing a change — see
+    # app/normalizer.py::apply_overrides.
+    overrides: list | None = Field(default=None, sa_column=Column(JSON))
+    error_message: str | None = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class HistoryEntry(SQLModel, table=True):
     __tablename__ = "history"
 

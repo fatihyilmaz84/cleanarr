@@ -8,7 +8,7 @@ from __future__ import annotations
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models import ChangeStatus, HistoryEntry, MediaFile, PendingChange
+from app.models import ChangeStatus, HistoryEntry, MediaFile, NormalizationChange, PendingChange
 
 
 async def review_item(session: AsyncSession, change: PendingChange) -> dict:
@@ -76,3 +76,43 @@ async def overview_stats(session: AsyncSession) -> dict:
         "total_bytes_reclaimed": sum(h.bytes_before - h.bytes_after for h in all_history),
         "total_applied_count": len(all_history),
     }
+
+
+async def normalize_item(session: AsyncSession, change: NormalizationChange) -> dict:
+    mf = await session.get(MediaFile, change.file_id)
+    overrides = set(change.overrides or [])
+    effective = [
+        {**p, "changed": False} if p["index"] in overrides and p["changed"] else p for p in change.proposed
+    ]
+    return {
+        "id": change.id,
+        "file_id": change.file_id,
+        "path": mf.path if mf else None,
+        "display_title": mf.display_title if mf else None,
+        "library_type": mf.library_type.value if mf else None,
+        "status": change.status.value,
+        "proposed": change.proposed,
+        "changes": [p for p in effective if p["changed"]],
+        "unchanged": [p for p in effective if not p["changed"]],
+        "error_message": change.error_message,
+        "created_at": change.created_at,
+    }
+
+
+async def list_normalize_items(session: AsyncSession, status: ChangeStatus) -> list[dict]:
+    result = await session.exec(
+        select(NormalizationChange)
+        .where(NormalizationChange.status == status)
+        .order_by(NormalizationChange.created_at.desc())
+    )
+    return [await normalize_item(session, c) for c in result.all()]
+
+
+async def normalize_stats(session: AsyncSession) -> dict:
+    pending = (
+        await session.exec(select(NormalizationChange).where(NormalizationChange.status == ChangeStatus.pending))
+    ).all()
+    queued = (
+        await session.exec(select(NormalizationChange).where(NormalizationChange.status == ChangeStatus.approved))
+    ).all()
+    return {"pending_count": len(pending), "queued_count": len(queued)}
