@@ -263,11 +263,29 @@ metadata to a consistent scheme, for both Jellyfin and Plex.
       sets `-metadata:s:i:title=...`, `-metadata:s:i:language=...`, or
       `-disposition:s:i:...`. This is the core new capability everything
       else depends on.
+      **Performance note, resolved 2026-08-19**: a pure-ffmpeg approach
+      (`-c copy` + new `-metadata`/`-disposition` flags) is just as slow as
+      today's track removal — it's still a full read+write of the whole
+      file, since `-c copy` never skips the I/O, only the re-encode. For
+      **MKV specifically**, prefer `mkvpropedit` (MKVToolNix) instead: it
+      rewrites the Matroska header/track-metadata section in place,
+      without touching the multi-GB media payload at all — near-instant
+      regardless of file size, vs. minutes for a full remux. Modern
+      Matroska has native fields for exactly what this needs
+      (`FlagOriginal`, `FlagCommentary`, `FlagHearingImpaired`, track
+      name, language), no remux required for pure metadata changes. New
+      system dependency (`mkvtoolnix` package, alongside `ffmpeg` in the
+      Dockerfile) but a small one. Doesn't help non-MKV containers
+      (MP4/MOV don't guarantee in-place header edits the same way) — use
+      the ffmpeg remux path as the fallback for those, and note the speed
+      difference to the user per-file so a mixed-format library doesn't
+      look inconsistently slow for no visible reason.
 - [ ] Per-track normalization-vs-removal exclusivity (see Architecture
       above) — needs the drop pass resolved and any normalize-selected
       tracks force-kept *before* the final `-map`/`-metadata` ffmpeg
-      command is assembled, so the two operations combine into one remux
-      pass rather than requiring two separate file rewrites.
+      command (or `mkvpropedit` call) is assembled, so the two operations
+      combine into one pass rather than requiring two separate file
+      rewrites.
 - [ ] Naming-style setting (`Language - Attribute` vs `Language Attribute`
       vs bracketed, etc.) as a new `RuleConfig`/settings field, applied
       library-wide — one canonical scheme, not per-file.
