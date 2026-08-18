@@ -41,6 +41,7 @@ async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         await _add_missing_columns(conn, "media_files", {"original_language": "VARCHAR"})
+        await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON"})
 
 
 async def _add_missing_columns(conn, table: str, columns: dict[str, str]) -> None:

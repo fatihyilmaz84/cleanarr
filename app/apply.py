@@ -1,7 +1,8 @@
 """Applies one approved pending change: re-probes and re-decides against the
 *current* rule config (never trusts the cached scan-time decision, since the
-file or the rules may have changed since it was queued), then hands off to
-the remux executor.
+file or the rules may have changed since it was queued), layers on any
+per-track overrides the user picked at approval time, then hands off to the
+remux executor.
 """
 
 from __future__ import annotations
@@ -17,7 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.analyzer import AnalyzerError, probe_file
 from app.models import ChangeStatus, HistoryEntry, MediaFile, PendingChange, StreamRecord
 from app.remux import RemuxError, apply_remux
-from app.rules import RuleConfig, decide
+from app.rules import RuleConfig, apply_overrides, decide
 
 
 @dataclass
@@ -52,6 +53,7 @@ async def apply_pending_change(
     try:
         probe = await asyncio.to_thread(probe_file, path)
         decisions = decide(probe, rule_config, media_file.original_language)
+        decisions = apply_overrides(decisions, change.overrides)
         result = await asyncio.to_thread(apply_remux, path, decisions, progress_cb=progress_cb)
     except (AnalyzerError, RemuxError) as e:
         change.status = ChangeStatus.failed

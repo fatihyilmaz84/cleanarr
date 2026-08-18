@@ -1,4 +1,4 @@
-from app.rules import RuleConfig, decide
+from app.rules import RuleConfig, apply_overrides, decide
 from tests.fixtures import make_probe, make_stream, typical_movie_streams
 
 
@@ -188,3 +188,43 @@ def test_unmapped_original_language_name_is_harmless():
     by_index = decisions_by_index(probe, config, original_language="Not A Real Language")
 
     assert by_index[2].keep is False
+
+
+def test_apply_overrides_force_keeps_specified_dropped_stream():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="jpn"),
+        make_stream(3, "subtitle", language="tur"),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(audio_keep_languages=["eng"], subtitle_keep_languages=["eng"])
+    decisions = decide(probe, config)
+    assert {d.stream.index for d in decisions if not d.keep} == {2, 3}
+
+    # Only override the subtitle — the jpn audio should still get dropped.
+    overridden = apply_overrides(decisions, [3])
+    by_index = {d.stream.index: d for d in overridden}
+
+    assert by_index[2].keep is False  # untouched, still dropped
+    assert by_index[3].keep is True  # force-kept
+    assert "overridden" in by_index[3].reason
+
+
+def test_apply_overrides_is_noop_for_already_kept_stream():
+    streams = [make_stream(0, "video"), make_stream(1, "audio", language="eng", is_default=True)]
+    probe = make_probe(streams)
+    decisions = decide(probe, RuleConfig())
+
+    overridden = apply_overrides(decisions, [1])  # index 1 is already kept
+
+    assert overridden == decisions  # untouched — override only ever pushes drop -> keep
+
+
+def test_apply_overrides_handles_none_and_empty():
+    streams = [make_stream(0, "video"), make_stream(1, "audio", language="eng", is_default=True)]
+    probe = make_probe(streams)
+    decisions = decide(probe, RuleConfig())
+
+    assert apply_overrides(decisions, None) == decisions
+    assert apply_overrides(decisions, []) == decisions

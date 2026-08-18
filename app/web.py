@@ -151,6 +151,14 @@ async def ui_review(request: Request, session: AsyncSession = Depends(get_sessio
 async def ui_approve(change_id: int, request: Request, session: AsyncSession = Depends(get_session)):
     change = await session.get(PendingChange, change_id)
     if change is not None:
+        form = await request.form()
+        # Every proposed-drop stream renders as a checked-by-default
+        # checkbox (see review.html) — whatever stayed checked is what
+        # actually gets dropped; anything unchecked becomes an override
+        # that force-keeps that stream instead.
+        confirmed_drops = {int(v) for v in form.getlist("drop_index")}
+        proposed_drops = {p["index"] for p in change.proposed if not p["keep"]}
+        change.overrides = sorted(proposed_drops - confirmed_drops)
         change.status = ChangeStatus.approved
         session.add(change)
         await session.commit()

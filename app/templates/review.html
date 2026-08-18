@@ -57,22 +57,25 @@
         <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant">{{ item.library_type }}</span>
       </div>
     </div>
-    <div class="flex flex-wrap gap-2 mb-4">
+    <div class="flex flex-wrap gap-2 mb-2">
       {% for s in item.kept %}
         <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded">KEEP {{ s.type }} {{ s.language or '?' }}</span>
       {% endfor %}
-      {% for s in item.dropped %}
-        <span class="font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-1 rounded" title="{{ s.reason }}">DROP {{ s.type }} {{ s.language or '?' }}{% if s.title %} &quot;{{ s.title }}&quot;{% endif %}</span>
-      {% endfor %}
     </div>
-    <div class="flex gap-3">
-      <form method="post" action="/review/{{ item.id }}/approve">
-        <button class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Approve &amp; Apply</button>
-      </form>
-      <form method="post" action="/review/{{ item.id }}/skip">
-        <button class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Skip</button>
-      </form>
-    </div>
+    <form method="post" action="/review/{{ item.id }}/approve">
+      <div class="flex flex-wrap gap-2 mb-4">
+        {% for s in item.dropped %}
+          <label class="flex items-center gap-1.5 font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-1 rounded cursor-pointer hover:bg-tertiary/20 transition-colors" title="{{ s.reason }} — uncheck to keep this track instead">
+            <input type="checkbox" name="drop_index" value="{{ s.index }}" checked class="rounded-sm border-white/20 bg-[#050505] text-tertiary focus:ring-tertiary h-3 w-3">
+            DROP {{ s.type }} {{ s.language or '?' }}{% if s.title %} &quot;{{ s.title }}&quot;{% endif %}
+          </label>
+        {% endfor %}
+      </div>
+      <div class="flex gap-3">
+        <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Approve &amp; Apply</button>
+        <button type="submit" formaction="/review/{{ item.id }}/skip" formnovalidate class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Skip</button>
+      </div>
+    </form>
   </div>
   {% endfor %}
 </div>

@@ -165,3 +165,21 @@ def decide(probe: MediaProbe, config: RuleConfig, original_language: str | None 
             decisions.append(StreamDecision(stream, True, f"unrecognized stream type '{stream.codec_type}', kept"))
 
     return _apply_keep_at_least_one_audio(decisions)
+
+
+def apply_overrides(decisions: list[StreamDecision], overrides: list[int] | None) -> list[StreamDecision]:
+    """Force-keep any stream index the user explicitly chose to keep at
+    approval time (e.g. "drop the audio but not this subtitle"), overriding
+    what the rule engine proposed. Only ever pushes a decision from drop to
+    keep — never the reverse — so this can't undermine the "keep at least
+    one audio track" safety net in `decide`.
+    """
+    if not overrides:
+        return decisions
+    override_set = set(overrides)
+    return [
+        StreamDecision(d.stream, True, "kept: manually overridden during approval")
+        if d.stream.index in override_set and not d.keep
+        else d
+        for d in decisions
+    ]

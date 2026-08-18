@@ -4,6 +4,7 @@ errors, and the classic POST-redirect-GET actions actually change state.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -121,8 +122,11 @@ def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
 
     pending = client.get("/api/review", params={"status": "pending"}).json()
     change_id = pending[0]["id"]
+    # Real submissions send every checked box (checked by default in the
+    # template) — with none, nothing would be confirmed for drop.
+    drop_indices = [str(p["index"]) for p in pending[0]["proposed"] if not p["keep"]]
 
-    resp = client.post(f"/review/{change_id}/approve")
+    resp = client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
     assert resp.status_code == 200
     _wait_for_idle(client)
 
@@ -131,3 +135,59 @@ def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
 
     overview_page = client.get("/")
     assert "1 file(s) tracked" in overview_page.text or "tracked" in overview_page.text
+
+
+def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
+    media_dir = tmp_path / "media"
+    media_dir.mkdir()
+    (media_dir / "Movie.mkv").write_bytes(b"x" * 1000)
+
+    full_streams = [
+        {"index": 0, "codec_type": "video", "codec_name": "h264", "tags": {}, "disposition": {"default": 1}},
+        {
+            "index": 1,
+            "codec_type": "audio",
+            "codec_name": "ac3",
+            "channels": 6,
+            "tags": {"language": "eng"},
+            "disposition": {"default": 1},
+        },
+        {"index": 2, "codec_type": "audio", "codec_name": "aac", "channels": 2, "tags": {"language": "jpn"}, "disposition": {}},
+        {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "tur"}, "disposition": {}},
+    ]
+    # Only the jpn audio track is actually removed — the tur subtitle stays
+    # checked off (overridden) at approval time even though the rules flag it too.
+    reduced_streams = [full_streams[0], full_streams[1], full_streams[3]]
+
+    def fake_run(cmd, capture_output, text, timeout):
+        if cmd[0] == "ffprobe":
+            target = Path(cmd[-1])
+            streams = reduced_streams if target.name.startswith(".cleanarr.tmp.") else full_streams
+            payload = {"format": {"duration": "3600.000000"}, "streams": streams}
+            return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
+        if cmd[0] == "ffmpeg":
+            Path(cmd[-1]).write_bytes(b"remuxed-bytes")
+            return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+        raise AssertionError(f"unexpected command: {cmd}")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    app = create_app(tmp_path / "test.db")
+    with TestClient(app, follow_redirects=True) as c:
+        c.post("/rules", data={"audio_keep_languages": "English", "subtitle_keep_languages": "English"})
+        c.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})
+        c.post("/scan")
+        _wait_for_idle(c)
+
+        pending = c.get("/api/review", params={"status": "pending"}).json()
+        change = pending[0]
+        dropped = [p for p in change["proposed"] if not p["keep"]]
+        assert {d["language"] for d in dropped} == {"jpn", "tur"}
+        audio_index = next(d["index"] for d in dropped if d["type"] == "audio")
+
+        # Only confirm the audio drop — leave the tur subtitle's checkbox off.
+        c.post(f"/review/{change['id']}/approve", data={"drop_index": str(audio_index)})
+        _wait_for_idle(c)
+
+        history = c.get("/api/history").json()
+        assert len(history[0]["streams_removed"]) == 1
+        assert history[0]["streams_removed"][0]["language"] == "jpn"

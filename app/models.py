@@ -72,6 +72,12 @@ class PendingChange(SQLModel, table=True):
     status: ChangeStatus = ChangeStatus.pending
     # Serialized list of {index, type, codec, language, title, keep, reason}
     proposed: list = Field(default_factory=list, sa_column=Column(JSON))
+    # Stream indices the user force-kept at approval time despite the rule
+    # engine proposing to drop them (e.g. "drop the audio but not this
+    # subtitle") — applied on top of the rules at apply time, see
+    # app/rules.py::apply_overrides. NULL/None for rows from before this
+    # column existed, meaning no overrides.
+    overrides: list | None = Field(default=None, sa_column=Column(JSON))
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
