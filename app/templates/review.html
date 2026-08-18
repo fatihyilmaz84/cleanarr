@@ -63,6 +63,13 @@
       {% endfor %}
     </div>
     <form method="post" action="/review/{{ item.id }}/approve">
+      {% if item.dropped|length > 1 %}
+      <div class="flex items-center gap-2 mb-1.5">
+        <button type="button" onclick="this.form.querySelectorAll('input[name=drop_index]').forEach(function(cb){cb.checked = true})" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface underline underline-offset-2">Drop all</button>
+        <span class="text-on-surface-variant text-[11px]">·</span>
+        <button type="button" onclick="this.form.querySelectorAll('input[name=drop_index]').forEach(function(cb){cb.checked = false})" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface underline underline-offset-2">Keep all</button>
+      </div>
+      {% endif %}
       <div class="flex flex-wrap gap-2 mb-4">
         {% for s in item.dropped %}
           <label class="flex items-center gap-1.5 font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-1 rounded cursor-pointer hover:bg-tertiary/20 transition-colors" title="{{ s.reason }} — uncheck to keep this track instead">

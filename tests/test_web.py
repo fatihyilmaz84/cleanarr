@@ -121,6 +121,7 @@ def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
 
     review_page = client.get("/review")
     assert "DROP audio jpn" in review_page.text
+    assert "Drop all" not in review_page.text  # only one droppable track — no bulk controls needed
 
     pending = client.get("/api/review", params={"status": "pending"}).json()
     change_id = pending[0]["id"]
@@ -179,6 +180,9 @@ def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
         c.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})
         c.post("/scan")
         _wait_for_idle(c)
+
+        review_page = c.get("/review").text
+        assert "Drop all" in review_page and "Keep all" in review_page  # two droppable tracks -> bulk controls shown
 
         pending = c.get("/api/review", params={"status": "pending"}).json()
         change = pending[0]
