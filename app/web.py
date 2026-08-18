@@ -209,7 +209,7 @@ async def ui_remove_from_queue(change_id: int, session: AsyncSession = Depends(g
         change.overrides = None
         session.add(change)
         await session.commit()
-    return _redirect("/queue", "Removed from queue — back in the Review Queue.")
+    return _redirect("/queue", "Removed from queue — back in Review.")
 
 
 @web_router.get("/history")

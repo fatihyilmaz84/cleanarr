@@ -1,4 +1,4 @@
-"""Tests for the Review Queue's filter controls (search / library type /
+"""Tests for the Review page's filter controls (search / library type /
 original language). Seeds pending changes directly into the DB rather than
 running a full scan — filtering itself (in app/web.py) is what's under test,
 not the scan pipeline.

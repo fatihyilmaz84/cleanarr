@@ -68,12 +68,12 @@
 </style>
 </head>
 <body class="flex h-screen overflow-hidden selection:bg-primary-container selection:text-on-primary-container">
-{% macro nav_link(href, icon, label, badge=None) %}
+{% macro nav_link(href, icon, label, badge=None, badge_id=None) %}
 <li>
   <a href="{{ href }}" class="flex items-center gap-3 px-3 py-2 rounded-DEFAULT transition-colors {{ 'text-primary font-medium nav-active' if request.url.path == href else 'text-on-surface-variant hover:text-on-surface hover:bg-white/5' }}">
     <span class="material-symbols-outlined">{{ icon }}</span>
     <span class="flex-1">{{ label }}</span>
-    {% if badge %}<span class="font-code-md text-[11px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full">{{ badge }}</span>{% endif %}
+    <span {% if badge_id %}id="{{ badge_id }}"{% endif %} class="font-code-md text-[11px] bg-primary/20 text-primary px-1.5 py-0.5 rounded-full{% if not badge %} hidden{% endif %}">{{ badge or 0 }}</span>
   </a>
 </li>
 {% endmacro %}
@@ -93,8 +93,8 @@
     <div>
       <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Library</h3>
       <ul class="space-y-1">
-        {{ nav_link("/review", "fact_check", "Review Queue", badge=pending_review_count) }}
-        {{ nav_link("/queue", "playlist_add_check", "Queue", badge=queued_count) }}
+        {{ nav_link("/review", "fact_check", "Review", badge=pending_review_count, badge_id="nav-badge-review") }}
+        {{ nav_link("/queue", "playlist_add_check", "Queue", badge=queued_count, badge_id="nav-badge-queue") }}
         {{ nav_link("/history", "history", "History") }}
       </ul>
     </div>

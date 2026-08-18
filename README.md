@@ -21,8 +21,9 @@ Then open `http://<host>:8420`. First run:
    and optionally your Sonarr/Radarr URL + API key for title/poster lookup.
 2. **Rules** — set which audio/subtitle languages to keep. Leave a list
    empty to not filter that track type at all.
-3. Click **Scan Now**, then review proposed changes under **Review Queue**
-   and approve the ones you want applied.
+3. Click **Scan Now**, then review proposed changes under **Review** —
+   pick which tracks to drop per file and add the ones you want to
+   **Queue**, then run the queue to apply them.
 
 ## Local development
 

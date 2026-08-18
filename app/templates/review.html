@@ -1,6 +1,6 @@
 {% extends "base.html" %}
-{% block title %}Review Queue — Cleanarr{% endblock %}
-{% block page_title %}Review Queue{% endblock %}
+{% block title %}Review — Cleanarr{% endblock %}
+{% block page_title %}Review{% endblock %}
 {% block content %}
 {% if total_count %}
 <form method="get" action="/review" class="glass-panel rounded-lg p-4 flex flex-wrap items-end gap-4">
@@ -38,13 +38,13 @@
   {% if filters.q or filters.library_type or filters.language or filters.drop_type %}
   <a href="/review" class="font-label-caps text-label-caps text-on-surface-variant px-4 py-2 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Clear</a>
   {% endif %}
-  <span class="font-label-caps text-label-caps text-on-surface-variant ml-auto">{{ items|length }} of {{ total_count }}</span>
+  <span id="review-count" class="font-label-caps text-label-caps text-on-surface-variant ml-auto">{{ items|length }} of {{ total_count }}</span>
 </form>
 {% endif %}
 {% if items %}
-<div class="space-y-4">
+<div class="space-y-4" id="review-items">
   {% for item in items %}
-  <div class="glass-panel rounded-lg p-5">
+  <div class="glass-panel rounded-lg p-5" data-review-card data-item-id="{{ item.id }}">
     <div class="flex justify-between items-start mb-3">
       <div>
         <h3 class="font-body-lg text-body-lg text-on-surface">{{ item.display_title or item.path }}</h3>
@@ -62,7 +62,7 @@
         <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded">KEEP {{ s.type }} {{ s.language or '?' }}</span>
       {% endfor %}
     </div>
-    <form method="post" action="/review/{{ item.id }}/approve">
+    <form method="post" action="/review/{{ item.id }}/approve" class="review-item-form">
       {% if item.dropped|length > 1 %}
       <div class="flex items-center gap-2 mb-1.5">
         <button type="button" onclick="this.form.querySelectorAll('input[name=drop_index]').forEach(function(cb){cb.checked = true})" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface underline underline-offset-2">Drop all</button>
@@ -79,8 +79,8 @@
         {% endfor %}
       </div>
       <div class="flex gap-3">
-        <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add to Queue</button>
-        <button type="submit" formaction="/review/{{ item.id }}/skip" formnovalidate class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Skip</button>
+        <button type="submit" data-badge-delta="review:-1,queue:+1" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add to Queue</button>
+        <button type="submit" formaction="/review/{{ item.id }}/skip" formnovalidate data-badge-delta="review:-1" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Skip</button>
       </div>
     </form>
   </div>
@@ -97,4 +97,58 @@
   <p class="font-body-md text-body-md text-on-surface-variant mt-2">Run a scan, or check your <a href="/rules" class="text-primary">rules</a> if you expected results.</p>
 </div>
 {% endif %}
+<script>
+(function () {
+  document.querySelectorAll(".review-item-form").forEach(function (form) {
+    form.addEventListener("submit", function (event) {
+      var submitter = event.submitter;
+      if (!submitter) return; // no JS support for reading the clicked button — fall back to a normal submit
+      event.preventDefault();
+
+      // submitter.formAction is NOT form.action's fallback when a button has
+      // no formaction attribute — per spec it defaults to the page's own
+      // URL, not the owning form's action. Only trust it when the button
+      // actually declares its own formaction (the Skip button does).
+      var url = submitter.hasAttribute("formaction") ? submitter.formAction : form.action;
+      fetch(url, { method: "POST", body: new FormData(form) })
+        .then(function (resp) {
+          if (!resp.ok) throw new Error("request failed: " + resp.status);
+
+          var card = form.closest("[data-review-card]");
+          card.remove();
+          applyBadgeDeltas(submitter.dataset.badgeDelta);
+          updateRemainingCount();
+
+          if (!document.querySelector("[data-review-card]")) {
+            window.location.reload(); // last item gone — let the server render the right empty state
+          }
+        })
+        .catch(function () {
+          window.location.reload(); // fall back to the pre-JS behavior on any failure
+        });
+    });
+  });
+
+  function applyBadgeDeltas(spec) {
+    if (!spec) return;
+    spec.split(",").forEach(function (part) {
+      var pair = part.split(":");
+      var badge = document.getElementById("nav-badge-" + pair[0]);
+      if (!badge) return;
+      var next = Math.max(0, parseInt(badge.textContent, 10) + parseInt(pair[1], 10));
+      badge.textContent = next;
+      badge.classList.toggle("hidden", next === 0);
+    });
+  }
+
+  function updateRemainingCount() {
+    var counter = document.getElementById("review-count");
+    if (!counter) return;
+    var remaining = document.querySelectorAll("[data-review-card]").length;
+    var parts = counter.textContent.split(" of ");
+    var total = Math.max(0, parseInt(parts[1] || parts[0], 10) - 1);
+    counter.textContent = remaining + " of " + total;
+  }
+})();
+</script>
 {% endblock %}
