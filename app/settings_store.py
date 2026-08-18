@@ -109,8 +109,23 @@ class Schedule(BaseModel):
     # Python's date.weekday(): 0=Monday .. 6=Sunday. Defaults to every day.
     days_of_week: list[int] = Field(default_factory=lambda: list(range(7)))
     # Scanning only ever proposes changes for review — this is the one
-    # explicit opt-in to actually apply them unattended. Off by default.
+    # explicit opt-in to apply what *this run's own scan* finds, unattended
+    # and unreviewed. Off by default.
     auto_apply: bool = False
+    # Separate opt-in: also apply anything already sitting in the Queue
+    # (status=approved) from a prior manual review. Lower-risk than
+    # auto_apply — a human already confirmed these specific changes, this
+    # just runs them on a schedule instead of a manual "Run Queue" click.
+    apply_queued: bool = False
+    # Optional end of the run window (e.g. hour=4/end_hour=6 -> "04:00-06:00").
+    # Both None means "no limit, run to completion" (the old, still-default
+    # behavior). A run that hits the deadline stops *between* files — it
+    # never aborts a file mid-remux — so anything left over just stays
+    # queued for the next scheduled run or a manual "Run Queue".
+    # end_hour <= hour is treated as the window spanning past midnight
+    # (e.g. 23:00-02:00), not as a same-day, negative-length window.
+    end_hour: int | None = None
+    end_minute: int | None = None
 
 
 async def get_schedules(session: AsyncSession) -> list[Schedule]:

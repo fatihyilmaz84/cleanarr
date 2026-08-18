@@ -5,14 +5,14 @@ twice for the same minute), and the scan job's auto_apply tail.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from app.db import init_db, make_engine, make_session_factory
 from app.jobs import JobManager
-from app.scheduler import Scheduler, schedule_matches
+from app.scheduler import Scheduler, schedule_matches, window_deadline
 from app.settings_store import DisplaySettings, Schedule, set_display_settings, set_schedules
 
 
@@ -40,6 +40,39 @@ def test_schedule_matches_respects_day_of_week():
 def test_schedule_matches_disabled_never_matches():
     s = _schedule(hour=4, minute=0, enabled=False)
     assert schedule_matches(s, datetime(2026, 1, 1, 4, 0)) is False
+
+
+def test_window_deadline_none_when_no_end_time_configured():
+    s = _schedule(hour=4, minute=0)  # end_hour/end_minute default None
+    trigger = datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC"))
+    assert window_deadline(s, trigger) is None
+
+
+def test_window_deadline_same_day_window():
+    s = _schedule(hour=4, minute=0, end_hour=6, end_minute=0)
+    trigger = datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC"))
+    assert window_deadline(s, trigger) == datetime(2026, 1, 1, 6, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_window_deadline_spans_midnight_when_end_before_start():
+    # 23:00 -> 02:00 is a 3-hour window landing the next day, not negative
+    s = _schedule(hour=23, minute=0, end_hour=2, end_minute=0)
+    trigger = datetime(2026, 1, 1, 23, 0, tzinfo=ZoneInfo("UTC"))
+    assert window_deadline(s, trigger) == datetime(2026, 1, 2, 2, 0, tzinfo=ZoneInfo("UTC"))
+
+
+def test_window_deadline_across_dst_transition_uses_timedelta_arithmetic():
+    # US DST starts 2026-03-08 2:00 AM (clocks spring forward to 3:00 AM) in
+    # America/New_York. A 04:00-06:00 window doesn't cross that gap, but a
+    # window trigger computed via wall-clock hour/minute arithmetic instead
+    # of a real timedelta could still get this wrong for windows that do —
+    # assert the deadline is exactly trigger + duration, not reconstructed
+    # from raw hour/minute (which is what a naive implementation might do).
+    tz = ZoneInfo("America/New_York")
+    s = _schedule(hour=1, minute=0, end_hour=4, end_minute=0)  # spans the spring-forward gap
+    trigger = datetime(2026, 3, 8, 1, 0, tzinfo=tz)
+    deadline = window_deadline(s, trigger)
+    assert deadline == trigger + timedelta(hours=3)
 
 
 @pytest.fixture

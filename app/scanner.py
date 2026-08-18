@@ -40,6 +40,9 @@ class ScanSummary:
     files_with_pending_changes: int = 0
     errors: list[str] = field(default_factory=list)
     arr_warnings: list[str] = field(default_factory=list)
+    # True if a `deadline` (see run_scan) was hit before every file could be
+    # scanned — not an error, just means the rest is left for next time.
+    stopped_early: bool = False
 
 
 def _iter_media_files(root: Path):
@@ -61,6 +64,7 @@ async def run_scan(
     rule_config: RuleConfig,
     arr_client: ArrClient | None = None,
     progress_cb: Callable[[ScanSummary], None] | None = None,
+    deadline: datetime | None = None,
 ) -> ScanSummary:
     summary = ScanSummary()
 
@@ -85,6 +89,13 @@ async def run_scan(
     summary.files_total = len(work_items)
 
     for file_path, library_type in work_items:
+        # Checked between files, never mid-file — a probe is read-only and
+        # quick, so there's no unsafe "abort partway through" state to worry
+        # about here (unlike a remux, see app/actions.py::_apply_changes).
+        if deadline is not None and _now() >= deadline:
+            summary.stopped_early = True
+            break
+
         summary.files_seen += 1
         try:
             await _scan_one_file(session, file_path, library_type, rule_config, arr_index, summary)

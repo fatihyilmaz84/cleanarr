@@ -384,6 +384,11 @@ async def ui_schedule(request: Request, session: AsyncSession = Depends(get_sess
             "schedule": s,
             "next_run": _next_run(s, now),
             "days_label": "every day" if len(s.days_of_week) == 7 else ", ".join(DAY_NAMES[d] for d in sorted(s.days_of_week)),
+            "time_label": (
+                f"{s.hour:02d}:{s.minute:02d}-{s.end_hour:02d}:{s.end_minute:02d}"
+                if s.end_hour is not None
+                else f"{s.hour:02d}:{s.minute:02d}"
+            ),
         }
         for s in schedules
     ]
@@ -391,12 +396,31 @@ async def ui_schedule(request: Request, session: AsyncSession = Depends(get_sess
     return templates.TemplateResponse(request, "schedule.html", ctx)
 
 
+def _parse_optional_clock_field(form, hour_key: str, minute_key: str) -> tuple[int | None, int | None]:
+    """An end-time hour/minute pair — both fields empty means "no window
+    configured" (None, None). Only one of the two filled in is treated the
+    same way (an incomplete window is as good as no window, not an error).
+    """
+    hour_raw = form.get(hour_key, "").strip()
+    minute_raw = form.get(minute_key, "").strip()
+    if not hour_raw or not minute_raw:
+        return None, None
+    return int(hour_raw), int(minute_raw)
+
+
 @web_router.post("/schedule")
 async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_session)):
     form = await request.form()
     try:
-        hour = int(form.get("hour", 4))
-        minute = int(form.get("minute", 0))
+        hour = max(0, min(23, int(form.get("hour", 4))))
+        minute = max(0, min(59, int(form.get("minute", 0))))
+        end_hour, end_minute = _parse_optional_clock_field(form, "end_hour", "end_minute")
+        if end_hour is not None:
+            end_hour = max(0, min(23, end_hour))
+            end_minute = max(0, min(59, end_minute))
+            if end_hour == hour and end_minute == minute:
+                # zero-length window is meaningless — treat as "no window"
+                end_hour = end_minute = None
     except ValueError:
         return _redirect("/schedule", "Invalid time — not saved.")
     days_of_week = [int(d) for d in form.getlist("days_of_week")]
@@ -405,10 +429,13 @@ async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_
     schedules.append(
         Schedule(
             label=form.get("label", "").strip(),
-            hour=max(0, min(23, hour)),
-            minute=max(0, min(59, minute)),
+            hour=hour,
+            minute=minute,
+            end_hour=end_hour,
+            end_minute=end_minute,
             days_of_week=days_of_week or list(range(7)),
             auto_apply="auto_apply" in form,
+            apply_queued="apply_queued" in form,
         )
     )
     await set_schedules(session, schedules)

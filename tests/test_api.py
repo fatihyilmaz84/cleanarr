@@ -176,8 +176,8 @@ def test_scan_job_auto_apply_applies_everything_unattended(client: TestClient):
     job = _wait_for_job(client, job_id)
 
     assert job["state"] == "done", job
-    assert job["result"]["auto_applied"] == {"attempted": 1, "succeeded": 1}
-    assert "auto-applied 1/1" in job["message"]
+    assert job["result"]["applied"] == {"attempted": 1, "succeeded": 1, "stopped_early": False}
+    assert "applied 1/1" in job["message"]
 
     assert client.get("/api/review", params={"status": "pending"}).json() == []
     history = client.get("/api/history").json()

@@ -3,6 +3,13 @@ any configured Schedule whose time-of-day/day-of-week matches the current
 moment (in the configured display timezone — see app/settings_store.py's
 DisplaySettings and TODO.md #4/#3), by submitting a scan job.
 
+A schedule with an end time (e.g. 04:00-06:00) also carries a computed
+deadline through to that job — see window_deadline() and its use in
+app/actions.py/app/scanner.py — so a run with a large queue behind it
+doesn't run indefinitely past the window: it stops *between* files once
+the deadline passes, never mid-file, leaving whatever's left for the next
+scheduled run or a manual "Run Queue".
+
 No external cron/APScheduler dependency, consistent with the deliberately
 minimal job runner in app/jobs.py — this is a single-container app with one
 schedule list, not a distributed system.
@@ -12,7 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
@@ -37,6 +44,27 @@ def schedule_matches(schedule: Schedule, now: datetime) -> bool:
         and now.minute == schedule.minute
         and now.weekday() in schedule.days_of_week
     )
+
+
+def window_deadline(schedule: Schedule, trigger: datetime) -> datetime | None:
+    """The instant a run started by `schedule` at `trigger` must stop
+    *starting* new work — None if the schedule has no end time configured
+    (run to completion, the default). Computed as trigger + duration rather
+    than a fresh wall-clock read, so it's correct across a DST transition
+    that happens to fall inside the window.
+
+    An end time at or before the start time is treated as the window
+    spanning past midnight (e.g. 23:00-02:00 is a 3-hour window, not a
+    negative one) — see the Schedule model docstring.
+    """
+    if schedule.end_hour is None or schedule.end_minute is None:
+        return None
+    start_minutes = schedule.hour * 60 + schedule.minute
+    end_minutes = schedule.end_hour * 60 + schedule.end_minute
+    duration = end_minutes - start_minutes
+    if duration <= 0:
+        duration += 24 * 60
+    return trigger + timedelta(minutes=duration)
 
 
 class Scheduler:
@@ -98,5 +126,19 @@ class Scheduler:
             if self._last_fired.get(schedule.id) == minute_key:
                 continue
             self._last_fired[schedule.id] = minute_key
-            logger.info("schedule %s ('%s') firing, auto_apply=%s", schedule.id, schedule.label, schedule.auto_apply)
-            submit_scan_job(self._session_factory, self._job_manager, auto_apply=schedule.auto_apply)
+            deadline = window_deadline(schedule, now)
+            logger.info(
+                "schedule %s ('%s') firing, auto_apply=%s, apply_queued=%s, deadline=%s",
+                schedule.id,
+                schedule.label,
+                schedule.auto_apply,
+                schedule.apply_queued,
+                deadline,
+            )
+            submit_scan_job(
+                self._session_factory,
+                self._job_manager,
+                auto_apply=schedule.auto_apply,
+                apply_queued=schedule.apply_queued,
+                deadline=deadline,
+            )

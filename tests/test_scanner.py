@@ -6,6 +6,8 @@ scan, even for a file whose bytes haven't moved since the last one.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 
@@ -114,5 +116,70 @@ async def test_rescan_picks_up_newly_connected_arr_without_reprobing(tmp_path, m
         media_file = (await session.exec(select(MediaFile))).one()
         assert media_file.display_title == "Example Movie"
         assert media_file.original_language == "Japanese"
+
+    await engine.dispose()
+
+
+@pytest.fixture
+def multi_media_dir(tmp_path):
+    d = tmp_path / "media"
+    d.mkdir()
+    for i in range(3):
+        (d / f"Movie{i}.mkv").write_bytes(b"x" * 1000)
+    return d
+
+
+@pytest.mark.asyncio
+async def test_run_scan_stops_before_starting_new_files_past_deadline(tmp_path, multi_media_dir, monkeypatch):
+    monkeypatch.setattr("app.scanner.probe_file", lambda path: _make_probe(path))
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+    media_paths = [MediaPath(path=str(multi_media_dir), library_type="movie")]
+
+    already_past = datetime.now(timezone.utc) - timedelta(minutes=1)
+    async with session_factory() as session:
+        summary = await run_scan(session, media_paths, RuleConfig(), deadline=already_past)
+
+    assert summary.files_total == 3  # directory walk still counts everything up front
+    assert summary.files_seen == 0  # but nothing was actually processed
+    assert summary.files_scanned == 0
+    assert summary.stopped_early is True
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_scan_completes_normally_when_deadline_not_reached(tmp_path, multi_media_dir, monkeypatch):
+    monkeypatch.setattr("app.scanner.probe_file", lambda path: _make_probe(path))
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+    media_paths = [MediaPath(path=str(multi_media_dir), library_type="movie")]
+
+    far_future = datetime.now(timezone.utc) + timedelta(hours=1)
+    async with session_factory() as session:
+        summary = await run_scan(session, media_paths, RuleConfig(), deadline=far_future)
+
+    assert summary.files_seen == 3
+    assert summary.files_scanned == 3
+    assert summary.stopped_early is False
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_run_scan_with_no_deadline_behaves_exactly_as_before(tmp_path, multi_media_dir, monkeypatch):
+    monkeypatch.setattr("app.scanner.probe_file", lambda path: _make_probe(path))
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+    media_paths = [MediaPath(path=str(multi_media_dir), library_type="movie")]
+
+    async with session_factory() as session:
+        summary = await run_scan(session, media_paths, RuleConfig())  # deadline defaults to None
+
+    assert summary.files_seen == 3
+    assert summary.stopped_early is False
 
     await engine.dispose()

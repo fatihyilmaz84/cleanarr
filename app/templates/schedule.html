@@ -9,16 +9,25 @@
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Label (optional)</label>
       <input name="label" placeholder="e.g. Nightly cleanup" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
     </div>
-    <div class="flex gap-4">
+    <div class="flex flex-wrap items-end gap-4">
       <div>
-        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Hour ({{ display_timezone }})</label>
-        <input type="number" name="hour" min="0" max="23" value="4" class="w-24 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Start ({{ display_timezone }})</label>
+        <div class="flex items-center gap-1">
+          <input type="number" name="hour" min="0" max="23" value="4" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <span class="text-on-surface-variant">:</span>
+          <input type="number" name="minute" min="0" max="59" value="0" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        </div>
       </div>
       <div>
-        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Minute</label>
-        <input type="number" name="minute" min="0" max="59" value="0" class="w-24 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">End (optional)</label>
+        <div class="flex items-center gap-1">
+          <input type="number" name="end_hour" min="0" max="23" placeholder="HH" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <span class="text-on-surface-variant">:</span>
+          <input type="number" name="end_minute" min="0" max="59" placeholder="MM" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+        </div>
       </div>
     </div>
+    <p class="font-body-md text-body-md text-on-surface-variant -mt-2">Leave End blank to run to completion. With an End time set, the run stops <em>between</em> files once it's reached — it always finishes whatever file it's currently on, never aborts mid-file — so anything left over just carries over to the next scheduled run. If a single file takes longer than the whole window, expect it to occasionally run over — that file is still let to finish.</p>
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Days</label>
       <div class="flex flex-wrap gap-3">
@@ -30,10 +39,18 @@
         {% endfor %}
       </div>
     </div>
-    <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-      <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
-      Also apply the resulting changes automatically (no review) — off means scan only
-    </label>
+    <div class="space-y-2">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Also apply anything already sitting in the Queue
+      </label>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">Safe on its own — these are changes you already reviewed and approved, this just runs them on a schedule instead of a manual "Run Queue" click.</p>
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Also apply this scan's own findings automatically (no review)
+      </label>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">More aggressive — whatever this run's scan proposes gets applied with no human ever looking at it first. Off by default; leave it off unless you fully trust your Rules.</p>
+    </div>
     <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add Schedule</button>
   </form>
 </div>
@@ -47,12 +64,15 @@
       <div class="flex items-center gap-2 mb-1">
         <span class="status-dot {{ 'status-healthy' if s.enabled else '' }}" style="{% if not s.enabled %}background-color:#555;{% endif %}"></span>
         <span class="font-body-md text-body-md text-on-surface">{{ s.label or "Schedule" }}</span>
+        {% if s.apply_queued %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-secondary/30 text-secondary" title="Also applies whatever is already sitting in the Queue">APPLY QUEUE</span>
+        {% endif %}
         {% if s.auto_apply %}
-        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-tertiary/30 text-tertiary" title="Applies resulting changes automatically, no review">AUTO-APPLY</span>
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-tertiary/30 text-tertiary" title="Applies this run's own scan findings automatically, no review">AUTO-APPLY</span>
         {% endif %}
       </div>
       <p class="font-code-md text-[11px] text-on-surface-variant">
-        {{ "%02d"|format(s.hour) }}:{{ "%02d"|format(s.minute) }} on {{ entry.days_label }}
+        {{ entry.time_label }} on {{ entry.days_label }}
         {% if entry.next_run %} — next run {{ entry.next_run.strftime("%a %b %d, %H:%M") }}{% endif %}
       </p>
     </div>

@@ -278,6 +278,51 @@ def test_schedule_defaults_to_every_day_when_no_days_checked(client: TestClient)
     assert "every day" in page
 
 
+def test_schedule_with_end_time_shows_window_and_apply_queued_badge(client: TestClient):
+    resp = client.post(
+        "/schedule",
+        data={"hour": "4", "minute": "0", "end_hour": "6", "end_minute": "0", "apply_queued": "on"},
+    )
+    assert "04:00-06:00" in resp.text
+    assert "APPLY QUEUE" in resp.text
+
+
+async def _get_schedule(session_factory):
+    async with session_factory() as session:
+        return (await get_schedules(session))[0]
+
+
+def test_schedule_zero_length_window_is_normalized_to_no_window(client: TestClient):
+    # end time identical to the start time is meaningless — treated the
+    # same as leaving End blank entirely.
+    client.post("/schedule", data={"hour": "4", "minute": "30", "end_hour": "4", "end_minute": "30"})
+    schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert schedule.end_hour is None
+    assert schedule.end_minute is None
+
+    page = client.get("/schedule").text
+    assert "04:30-" not in page  # no window rendered
+    assert "04:30" in page
+
+
+def test_schedule_incomplete_end_time_is_treated_as_no_window(client: TestClient):
+    # only end_hour given, end_minute left blank — an incomplete window is
+    # as good as none, not an error.
+    client.post("/schedule", data={"hour": "4", "minute": "0", "end_hour": "6"})
+    schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert schedule.end_hour is None
+    assert schedule.end_minute is None
+
+
+def test_schedule_window_spanning_midnight_saved_and_displayed_correctly(client: TestClient):
+    resp = client.post("/schedule", data={"hour": "23", "minute": "0", "end_hour": "2", "end_minute": "0"})
+    assert "23:00-02:00" in resp.text
+
+    schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert schedule.hour == 23
+    assert schedule.end_hour == 2
+
+
 def test_queue_run_and_remove(client: TestClient, media_dir: Path):
     client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
     client.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})

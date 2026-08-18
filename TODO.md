@@ -80,6 +80,42 @@ action that processes everything at once.
       applies every resulting pending change unattended (no per-track
       overrides — there's no one there to check a box).
 
+**Follow-up (time window + queue-draining)**: what happens with a large
+batch and a schedule like "04:00-06:00"? — addressed:
+- [x] `Schedule.end_hour`/`end_minute` (optional) define a run window.
+      `window_deadline()` (`app/scheduler.py`) computes the deadline via
+      `trigger + duration` (correct across a DST transition inside the
+      window), treating `end <= start` as spanning past midnight (e.g.
+      23:00-02:00). Both None (the default) means "no limit," unchanged
+      from before.
+- [x] The deadline is checked *between* files only, in both `run_scan`
+      (`app/scanner.py`) and the shared apply loop
+      (`app/actions.py::_apply_changes`) — never mid-file, since aborting a
+      remux partway through could leave a corrupt temp file. A run that
+      hits the deadline just stops there; whatever's left (unscanned files,
+      unapplied changes) carries over to the next scheduled run or a manual
+      scan / Run Queue. `ScanSummary.stopped_early` / the apply result's
+      `stopped_early` and the job message make this visible via `/api/jobs`
+      — there's no persistent history of past scheduled runs beyond that
+      (no job-history page exists yet); the Queue page's own item count is
+      the practical way to notice a run didn't finish everything.
+- [x] New `apply_queued` schedule option, deliberately **separate** from
+      `auto_apply` rather than folded into it: applies whatever's already
+      sitting in the Queue (status=approved, i.e. already manually
+      reviewed) — safe on its own terms since a human already confirmed
+      those specific changes, unlike `auto_apply`'s "no review at all."
+      Keeping them independent preserves the existing safety promise that
+      `auto_apply=False` means "this schedule applies nothing unattended."
+      A schedule can combine both; the two id sets can never overlap
+      (a PendingChange has exactly one status at a time), so nothing is
+      double-applied.
+- Edge cases considered: a single file that takes longer than the whole
+  window is still let to finish (documented in the Schedule page's own
+  copy, not just a footnote) — a very short window paired with slow
+  remuxes may mean slow overall progress across many nights, which is
+  expected, not a bug. Zero-length/incomplete end-time input from the form
+  is normalized to "no window" rather than erroring.
+
 ## 4. Fix timezone handling — done ✅
 
 Confirmed root cause: the Docker container has no `TZ` set (defaults to
