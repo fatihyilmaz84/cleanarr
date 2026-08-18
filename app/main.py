@@ -20,6 +20,7 @@ from app.jobs import JobManager
 from app.models import ChangeStatus, PendingChange
 from app.queries import list_history_items, list_review_items, overview_stats
 from app.rules import RuleConfig
+from app.scheduler import Scheduler
 from app.settings_store import (
     ArrConfig,
     MediaPath,
@@ -181,7 +182,10 @@ def _make_lifespan(db_path: Path | None):
         app.state.session_factory = make_session_factory(engine)
         app.state.job_manager = JobManager()
         app.state.job_manager.start()
+        app.state.scheduler = Scheduler(app.state.session_factory, app.state.job_manager)
+        app.state.scheduler.start()
         yield
+        await app.state.scheduler.stop()
         await app.state.job_manager.stop()
         await engine.dispose()
 

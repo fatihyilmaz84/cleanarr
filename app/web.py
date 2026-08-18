@@ -8,7 +8,7 @@ client-side JS.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from urllib.parse import quote
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -28,14 +28,17 @@ from app.settings_store import (
     ArrConfig,
     DisplaySettings,
     MediaPath,
+    Schedule,
     get_arr_config,
     get_display_settings,
     get_media_paths,
     get_rule_config,
+    get_schedules,
     set_arr_config,
     set_display_settings,
     set_media_paths,
     set_rule_config,
+    set_schedules,
 )
 
 templates = Jinja2Templates(directory="app/templates")
@@ -311,3 +314,84 @@ async def ui_save_arr(request: Request, session: AsyncSession = Depends(get_sess
     )
     await set_arr_config(session, config)
     return _redirect("/settings", "Sonarr/Radarr connection saved.")
+
+
+DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+
+def _next_run(schedule: Schedule, now: datetime) -> datetime | None:
+    """Next datetime (in `now`'s timezone) this schedule will fire, purely
+    for display — the scheduler itself doesn't use this, it just checks
+    every poll whether "right now" matches (see app/scheduler.py).
+    """
+    if not schedule.enabled or not schedule.days_of_week:
+        return None
+    for days_ahead in range(8):
+        candidate_date = (now + timedelta(days=days_ahead)).date()
+        candidate = datetime.combine(candidate_date, time(schedule.hour, schedule.minute), tzinfo=now.tzinfo)
+        if candidate >= now and candidate.weekday() in schedule.days_of_week:
+            return candidate
+    return None
+
+
+@web_router.get("/schedule")
+async def ui_schedule(request: Request, session: AsyncSession = Depends(get_session)):
+    ctx = await _base_context(request, session)
+    schedules = await get_schedules(session)
+    try:
+        tz = ZoneInfo(ctx["display_timezone"])
+    except ZoneInfoNotFoundError:
+        tz = ZoneInfo("UTC")
+    now = datetime.now(tz)
+    ctx["schedules"] = [
+        {
+            "schedule": s,
+            "next_run": _next_run(s, now),
+            "days_label": "every day" if len(s.days_of_week) == 7 else ", ".join(DAY_NAMES[d] for d in sorted(s.days_of_week)),
+        }
+        for s in schedules
+    ]
+    ctx["day_names"] = DAY_NAMES
+    return templates.TemplateResponse(request, "schedule.html", ctx)
+
+
+@web_router.post("/schedule")
+async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    try:
+        hour = int(form.get("hour", 4))
+        minute = int(form.get("minute", 0))
+    except ValueError:
+        return _redirect("/schedule", "Invalid time — not saved.")
+    days_of_week = [int(d) for d in form.getlist("days_of_week")]
+
+    schedules = await get_schedules(session)
+    schedules.append(
+        Schedule(
+            label=form.get("label", "").strip(),
+            hour=max(0, min(23, hour)),
+            minute=max(0, min(59, minute)),
+            days_of_week=days_of_week or list(range(7)),
+            auto_apply="auto_apply" in form,
+        )
+    )
+    await set_schedules(session, schedules)
+    return _redirect("/schedule", "Schedule added.")
+
+
+@web_router.post("/schedule/{schedule_id}/toggle")
+async def ui_toggle_schedule(schedule_id: str, session: AsyncSession = Depends(get_session)):
+    schedules = await get_schedules(session)
+    for s in schedules:
+        if s.id == schedule_id:
+            s.enabled = not s.enabled
+    await set_schedules(session, schedules)
+    return _redirect("/schedule")
+
+
+@web_router.post("/schedule/{schedule_id}/delete")
+async def ui_delete_schedule(schedule_id: str, session: AsyncSession = Depends(get_session)):
+    schedules = await get_schedules(session)
+    schedules = [s for s in schedules if s.id != schedule_id]
+    await set_schedules(session, schedules)
+    return _redirect("/schedule", "Schedule removed.")

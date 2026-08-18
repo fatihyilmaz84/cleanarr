@@ -165,3 +165,21 @@ def test_scan_with_no_media_paths_configured(tmp_path, monkeypatch):
         job = _wait_for_job(c, job_id)
         assert job["state"] == "done"
         assert job["message"] == "no media paths configured"
+
+
+def test_scan_job_auto_apply_applies_everything_unattended(client: TestClient):
+    # Only the scheduler (app/scheduler.py) ever passes auto_apply=True —
+    # this exercises the same code path directly (TODO.md #3).
+    from app.actions import submit_scan_job
+
+    job_id = submit_scan_job(client.app.state.session_factory, client.app.state.job_manager, auto_apply=True)
+    job = _wait_for_job(client, job_id)
+
+    assert job["state"] == "done", job
+    assert job["result"]["auto_applied"] == {"attempted": 1, "succeeded": 1}
+    assert "auto-applied 1/1" in job["message"]
+
+    assert client.get("/api/review", params={"status": "pending"}).json() == []
+    history = client.get("/api/history").json()
+    assert len(history) == 1
+    assert history[0]["streams_removed"][0]["language"] == "jpn"

@@ -4,6 +4,7 @@ errors, and the classic POST-redirect-GET actions actually change state.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import time
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from app.jobs import Job, JobState
 from app.main import create_app
+from app.settings_store import get_schedules
 from tests.test_api import FULL_STREAMS, REDUCED_STREAMS, _fake_subprocess_run, _wait_for_job  # noqa: F401
 
 
@@ -44,7 +46,7 @@ def client(tmp_path, media_dir, monkeypatch):
 
 
 def test_empty_state_pages_render(client: TestClient):
-    for path in ["/", "/review", "/rules", "/settings", "/history"]:
+    for path in ["/", "/review", "/rules", "/settings", "/history", "/schedule"]:
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert "Cleanarr" in resp.text
@@ -191,3 +193,40 @@ def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
         history = c.get("/api/history").json()
         assert len(history[0]["streams_removed"]) == 1
         assert history[0]["streams_removed"][0]["language"] == "jpn"
+
+
+def test_schedule_add_toggle_delete_via_form(client: TestClient):
+    resp = client.post(
+        "/schedule",
+        data={
+            "label": "Nightly cleanup",
+            "hour": "4",
+            "minute": "30",
+            "days_of_week": ["0", "2", "4"],
+            "auto_apply": "on",
+        },
+    )
+    assert resp.status_code == 200
+    assert "Schedule added" in resp.text
+    assert "Nightly cleanup" in resp.text
+    assert "04:30 on Mon, Wed, Fri" in resp.text
+    assert "AUTO-APPLY" in resp.text
+
+    async def _get_id():
+        async with client.app.state.session_factory() as session:
+            return (await get_schedules(session))[0].id
+
+    schedule_id = asyncio.run(_get_id())
+
+    disabled = client.post(f"/schedule/{schedule_id}/toggle").text
+    assert "Enable" in disabled  # button now offers to re-enable -> currently disabled
+
+    client.post(f"/schedule/{schedule_id}/toggle")  # re-enable
+    deleted = client.post(f"/schedule/{schedule_id}/delete").text
+    assert "No schedules yet" in deleted
+
+
+def test_schedule_defaults_to_every_day_when_no_days_checked(client: TestClient):
+    client.post("/schedule", data={"hour": "4", "minute": "0"})  # no days_of_week at all
+    page = client.get("/schedule").text
+    assert "every day" in page

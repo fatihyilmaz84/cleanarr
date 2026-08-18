@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %}Schedule — Cleanarr{% endblock %}
+{% block page_title %}Schedule{% endblock %}
+{% block content %}
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Add a schedule</h3>
+  <form method="post" action="/schedule" class="space-y-4">
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Label (optional)</label>
+      <input name="label" placeholder="e.g. Nightly cleanup" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+    </div>
+    <div class="flex gap-4">
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Hour ({{ display_timezone }})</label>
+        <input type="number" name="hour" min="0" max="23" value="4" class="w-24 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Minute</label>
+        <input type="number" name="minute" min="0" max="59" value="0" class="w-24 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      </div>
+    </div>
+    <div>
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Days</label>
+      <div class="flex flex-wrap gap-3">
+        {% for day in day_names %}
+        <label class="flex items-center gap-1.5 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="days_of_week" value="{{ loop.index0 }}" checked class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          {{ day }}
+        </label>
+        {% endfor %}
+      </div>
+    </div>
+    <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+      <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+      Also apply the resulting changes automatically (no review) — off means scan only
+    </label>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add Schedule</button>
+  </form>
+</div>
+
+{% if schedules %}
+<div class="space-y-3">
+  {% for entry in schedules %}
+  {% set s = entry.schedule %}
+  <div class="glass-panel rounded-lg p-4 flex items-center justify-between gap-4">
+    <div>
+      <div class="flex items-center gap-2 mb-1">
+        <span class="status-dot {{ 'status-healthy' if s.enabled else '' }}" style="{% if not s.enabled %}background-color:#555;{% endif %}"></span>
+        <span class="font-body-md text-body-md text-on-surface">{{ s.label or "Schedule" }}</span>
+        {% if s.auto_apply %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-tertiary/30 text-tertiary" title="Applies resulting changes automatically, no review">AUTO-APPLY</span>
+        {% endif %}
+      </div>
+      <p class="font-code-md text-[11px] text-on-surface-variant">
+        {{ "%02d"|format(s.hour) }}:{{ "%02d"|format(s.minute) }} on {{ entry.days_label }}
+        {% if entry.next_run %} — next run {{ entry.next_run.strftime("%a %b %d, %H:%M") }}{% endif %}
+      </p>
+    </div>
+    <div class="flex gap-2 flex-shrink-0">
+      <form method="post" action="/schedule/{{ s.id }}/toggle">
+        <button class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">{{ "Disable" if s.enabled else "Enable" }}</button>
+      </form>
+      <form method="post" action="/schedule/{{ s.id }}/delete">
+        <button class="font-label-caps text-label-caps border border-white/10 text-tertiary px-3 py-1.5 rounded-DEFAULT hover:bg-tertiary/10 transition-colors">Delete</button>
+      </form>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="glass-panel rounded-lg p-8 text-center">
+  <p class="font-body-lg text-body-lg text-on-surface-variant">No schedules yet.</p>
+  <p class="font-body-md text-body-md text-on-surface-variant mt-2">Add one above to scan (and optionally apply) automatically at a set time.</p>
+</div>
+{% endif %}
+{% endblock %}
