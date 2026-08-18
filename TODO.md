@@ -167,15 +167,128 @@ commentary track's `title` might be "Commentary", "Director's Commentary",
       skipped; commentary/SDH turned out to need only two short pattern
       lists, not a lookup table.
 
+## 6. Language flag icons (FlagKit)
+
+Show a small flag icon next to language names instead of/alongside plain
+text — [FlagKit](https://github.com/madebybowtie/FlagKit) (MIT-licensed
+SVG/PNG country flags) as the icon source, requested directly.
+
+- [ ] Vendor a subset of FlagKit's SVGs into `app/static/` (self-hosted —
+      this app has no external CDN dependency anywhere else, e.g. the
+      Tailwind/font `<script>`/`<link>` tags in `base.html` are the only
+      current exception and even those are 3rd-party CDN calls worth
+      revisiting separately). No need for the full ~200-flag set — only
+      the languages actually in `app/languages.py`'s `LANGUAGE_OPTIONS`
+      (~57 entries).
+- [ ] **Open design question**: FlagKit is *country* flags; this app deals
+      in *languages*, and the mapping isn't 1:1 (English -> which flag,
+      US or UK? Chinese -> which of several?). Needs an explicit
+      language-code -> flag-code table (small, hand-picked, alongside
+      `LANGUAGE_OPTIONS`) rather than a guessed convention — ask the user
+      for preferences on the genuinely ambiguous ones rather than
+      guessing silently.
+- [ ] Surface it in: the Rules page's audio/subtitle `<select multiple>`
+      dropdowns (`app/templates/rules.html`), the original-language badge
+      and per-track language badges on Review/Queue
+      (`app/templates/review.html`, `queue.html`), and the Review filter's
+      "Original language" `<select>` (`app/web.py`'s `ui_review`).
+- [ ] Keep it a pure visual enhancement — flags are decoration alongside
+      the existing text, never a replacement for it (accessibility, and
+      several languages share a plausible flag).
+
+## 7. Track metadata normalizer (Jellyfin + Plex naming/metadata consistency)
+
+Full spec supplied by the user 2026-08-19 — copied in spirit below, broken
+into sub-tasks with notes on what already exists vs. what's genuinely new.
+This is a substantially bigger feature than #5 above (which only decides
+*keep vs. drop*) — this one *rewrites* track titles/language/disposition
+metadata to a consistent scheme, for both Jellyfin and Plex.
+
+**Scope clarification needed before starting**: the spec says "Never...
+remove tracks" — but removing unwanted tracks is this app's whole existing
+purpose (see README). These need to coexist as separate operations on the
+same remux pass (drop-by-rule as today, *plus* rename/retag whatever
+survives), not one replacing the other — worth confirming that reading
+with the user before implementation, rather than assuming.
+
+### What already exists and this should build on, not duplicate
+- Language canon + codes: `app/languages.py` (`LANGUAGE_OPTIONS`,
+  `iso_codes_for_language_name`) already covers the "eng -> English",
+  "use ISO metadata" pieces for ~57 languages.
+- Forced detection: `MediaStream.is_forced` (ffprobe disposition), already
+  used in `app/rules.py`.
+- SDH/HI detection: `MediaStream.is_hearing_impaired` (disposition) +
+  `RuleConfig.hearing_impaired_title_patterns` title-text fallback (#5,
+  just shipped) — CC is not currently distinguished from SDH, would need
+  its own flag/pattern list alongside it.
+- Commentary detection: `is_commentary` (disposition) +
+  `RuleConfig.commentary_title_patterns` (#5).
+- Default-flag handling: not currently touched by `app/remux.py` at
+  all — needs verification that ffmpeg's remux preserves (or lets us set)
+  `disposition:default` explicitly rather than leaving it to chance.
+- Dry-run / confirm-before-modifying: already the app's entire model —
+  Review -> Queue -> Run Queue is inherently a dry-run-then-confirm flow,
+  nothing proposed is ever silently applied. The spec's "BEFORE -> AFTER
+  table" maps directly onto the existing Review Queue UI, just needs a
+  title-rename row added to it (see below).
+- Change log: `HistoryEntry` (`app/models.py`) already records what was
+  removed per file; would need a `titles_changed`-style field alongside
+  `streams_removed` for rename operations.
+
+### Genuinely new work
+- [ ] **Title/metadata rewriting itself** — `app/remux.py`'s
+      `build_ffmpeg_command` only ever does `-map` (keep/drop); it never
+      sets `-metadata:s:i:title=...`, `-metadata:s:i:language=...`, or
+      `-disposition:s:i:...`. This is the core new capability everything
+      else depends on.
+- [ ] Naming-style setting (`Language - Attribute` vs `Language Attribute`
+      vs bracketed, etc.) as a new `RuleConfig`/settings field, applied
+      library-wide — one canonical scheme, not per-file.
+- [ ] Per-category preserve/strip toggles: preserve meaningful existing
+      titles, strip codec/channel/bitrate info, preserve
+      Original/Dubbed/Commentary/Descriptive-Audio labels.
+- [ ] Preferred-language auto-default selection (audio + subtitle,
+      separately configurable) — with "never put 'Default' in the title
+      itself, it's disposition metadata" as a hard rule.
+- [ ] Forced/Foreign/Forced Narrative/Signs & Songs equivalence — opt-in
+      only, off means treated as genuinely distinct (matches this app's
+      existing philosophy of never assuming an aggressive default).
+- [ ] Detection priority order (container metadata > track language >
+      forced/default/SDH flags > existing title > filename > external
+      convention) — already the shape of #5's disposition-then-title-regex
+      approach; extend the same pattern rather than inventing a new one.
+- [ ] Ambiguous-track flagging, separate from confident matches, in the
+      Review UI.
+- [ ] **Jellyfin vs. Plex research** — needs actual investigation (not
+      guessing) into where the two disagree on interpreting
+      forced/default/SDH container metadata, particularly for MKV. Until
+      that's done, "apply the safest common representation + report the
+      incompatibility, never silently discard" can't be implemented
+      correctly.
+- [ ] Target-server setting (Jellyfin / Plex / Both) — per the spec, avoid
+      generating different metadata for the two unless the research above
+      finds a real conflict; default to whatever's provably safe for both.
+
+### Suggested approach when this gets picked up
+Land the ffmpeg metadata-rewriting capability and a single naming
+convention first (small, testable in isolation via `scripts/cli.py`
+against real files, same as the original remux work) before layering the
+Jellyfin/Plex-specific research and the dual-purpose Review UI on top —
+this is large enough to warrant its own multi-session pass, not a single
+sitting.
+
 ## Suggested order
 
 1. ~~Timezone fix (4)~~ — done.
 2. ~~Per-track selective apply (1)~~ — done.
-3. ~~Scheduler (3)~~ — done.
+3. ~~Scheduler (3)~~ — done (including the time-window/queue-draining
+   follow-up).
 4. ~~Job queue (2)~~ — done.
 5. ~~Track name normalization (5)~~ — mostly done (detection + new
    drop_hearing_impaired_tracks rule); display cleanup and a canonical-name
    table deliberately left open, not worth it yet.
-
-All originally-planned items are now addressed in some form. Nothing left
-queued unless something new comes up.
+6. **Flag icons (6)** — small, self-contained, mostly a vendoring +
+   language-to-flag mapping exercise.
+7. **Track metadata normalizer (7)** — the big one; needs the scope
+   clarification above resolved first, then the ffmpeg metadata-rewrite
+   capability before anything else in that section can land.
