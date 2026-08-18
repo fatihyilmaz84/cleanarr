@@ -228,3 +228,103 @@ def test_apply_overrides_handles_none_and_empty():
 
     assert apply_overrides(decisions, None) == decisions
     assert apply_overrides(decisions, []) == decisions
+
+
+def test_rule_config_ships_with_sensible_commentary_and_hi_pattern_defaults():
+    config = RuleConfig()
+    assert config.commentary_title_patterns == ["commentary"]
+    assert config.hearing_impaired_title_patterns == ["sdh", "hearing.impaired"]
+    # detection is harmless by default — the drop toggles stay off
+    assert config.drop_commentary_tracks is False
+    assert config.drop_hearing_impaired_tracks is False
+
+
+def test_commentary_detected_via_title_when_disposition_flag_missing():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        # is_commentary=False (container didn't set the disposition flag) but the title says it is
+        make_stream(2, "audio", language="eng", title="Director's Commentary", is_commentary=False),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_commentary_tracks=True)
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is False
+    assert "title matches commentary pattern" in by_index[2].reason
+
+
+def test_commentary_title_detection_is_inert_without_the_drop_toggle():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="eng", title="Director's Commentary", is_commentary=False),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_commentary_tracks=False)  # default
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is True
+
+
+def test_hearing_impaired_detected_via_title_when_disposition_flag_missing():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "subtitle", language="eng", title="English (SDH)", is_hearing_impaired=False),
+        make_stream(3, "subtitle", language="eng", title="English"),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_hearing_impaired_tracks=True)
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is False
+    assert "title matches hearing-impaired pattern" in by_index[2].reason
+    assert by_index[3].keep is True  # plain "English" subtitle unaffected
+
+
+def test_forced_subtitle_beats_hearing_impaired_drop():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "subtitle", language="eng", title="English (SDH)", is_forced=True),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_hearing_impaired_tracks=True, always_keep_forced_subtitles=True)
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is True
+
+
+def test_user_configured_commentary_pattern_is_respected():
+    # user adds their own pattern instead of relying on the "commentary" default
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="eng", title="Cast & Crew Chat", is_commentary=False),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_commentary_tracks=True, commentary_title_patterns=["cast.*crew"])
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is False
+
+
+def test_disposition_flag_still_works_without_any_title_match():
+    streams = [
+        make_stream(0, "video"),
+        make_stream(1, "audio", language="eng", is_default=True),
+        make_stream(2, "audio", language="eng", title=None, is_commentary=True),
+    ]
+    probe = make_probe(streams)
+    config = RuleConfig(drop_commentary_tracks=True, commentary_title_patterns=[])  # no patterns at all
+
+    by_index = decisions_by_index(probe, config)
+
+    assert by_index[2].keep is False
+    assert "disposition flag" in by_index[2].reason

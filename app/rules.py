@@ -26,6 +26,7 @@ class RuleConfig(BaseModel):
     keep_untagged_language: bool = True
     always_keep_forced_subtitles: bool = True
     drop_commentary_tracks: bool = False
+    drop_hearing_impaired_tracks: bool = False
 
     # When a Sonarr/Radarr connection resolves a file's original language
     # (e.g. "Korean" for a Korean movie), keep tracks in that language even
@@ -36,6 +37,17 @@ class RuleConfig(BaseModel):
     # Regex patterns (case-insensitive) matched against a stream's title tag.
     # A match forces a drop, e.g. ["commentary", "sdh"].
     drop_title_patterns: list[str] = Field(default_factory=list)
+
+    # Different muxers tag commentary/hearing-impaired tracks inconsistently
+    # — some set ffprobe's disposition flags correctly, others only put it
+    # in the free-text title (e.g. "Director's Commentary", "English (SDH)").
+    # These patterns are a title-text fallback for is_commentary/
+    # is_hearing_impaired classification, checked in addition to the
+    # disposition flags — unlike the keep-lists above, "commentary"/"SDH"
+    # are unambiguous, universal signals, so these ship with sensible
+    # defaults rather than empty; still fully editable in Rules.
+    commentary_title_patterns: list[str] = Field(default_factory=lambda: ["commentary"])
+    hearing_impaired_title_patterns: list[str] = Field(default_factory=lambda: ["sdh", "hearing.impaired"])
 
     def normalized_audio_languages(self) -> set[str]:
         return {lang.strip().lower() for lang in self.audio_keep_languages if lang.strip()}
@@ -71,13 +83,37 @@ def _matches_original_language(stream: MediaStream, config: RuleConfig, original
     )
 
 
+def _commentary_reason(stream: MediaStream, config: RuleConfig) -> str | None:
+    """Why this stream counts as commentary, or None if it doesn't — checks
+    ffprobe's disposition flag first, then falls back to title-text
+    patterns for containers that don't set the flag correctly.
+    """
+    if stream.is_commentary:
+        return "commentary track (disposition flag)"
+    pattern = _matches_drop_pattern(stream.title, config.commentary_title_patterns)
+    if pattern:
+        return f"title matches commentary pattern '{pattern}'"
+    return None
+
+
+def _hearing_impaired_reason(stream: MediaStream, config: RuleConfig) -> str | None:
+    """Same idea as `_commentary_reason`, for hearing-impaired (SDH) subs."""
+    if stream.is_hearing_impaired:
+        return "hearing-impaired subtitle (disposition flag)"
+    pattern = _matches_drop_pattern(stream.title, config.hearing_impaired_title_patterns)
+    if pattern:
+        return f"title matches hearing-impaired pattern '{pattern}'"
+    return None
+
+
 def _decide_audio(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> StreamDecision:
     drop_pattern = _matches_drop_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
         return StreamDecision(stream, False, f"title matches drop pattern '{drop_pattern}'")
 
-    if stream.is_commentary and config.drop_commentary_tracks:
-        return StreamDecision(stream, False, "commentary track, drop_commentary_tracks enabled")
+    commentary_reason = _commentary_reason(stream, config)
+    if commentary_reason and config.drop_commentary_tracks:
+        return StreamDecision(stream, False, f"{commentary_reason}, drop_commentary_tracks enabled")
 
     allowed_languages = config.normalized_audio_languages()
     if not allowed_languages:
@@ -104,6 +140,10 @@ def _decide_subtitle(stream: MediaStream, config: RuleConfig, original_language_
     drop_pattern = _matches_drop_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
         return StreamDecision(stream, False, f"title matches drop pattern '{drop_pattern}'")
+
+    hi_reason = _hearing_impaired_reason(stream, config)
+    if hi_reason and config.drop_hearing_impaired_tracks:
+        return StreamDecision(stream, False, f"{hi_reason}, drop_hearing_impaired_tracks enabled")
 
     allowed_languages = config.normalized_subtitle_languages()
     if not allowed_languages:

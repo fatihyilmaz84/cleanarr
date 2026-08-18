@@ -38,13 +38,29 @@
         Always keep forced subtitles
       </label>
       <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-        <input type="checkbox" name="drop_commentary_tracks" {% if rules.drop_commentary_tracks %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
-        Drop commentary tracks
-      </label>
-      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
         <input type="checkbox" name="always_keep_original_language" {% if rules.always_keep_original_language %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
         Always keep the media's original-language track, even if not in the keep-lists above
       </label>
+    </div>
+    <div class="space-y-3 border-t border-white/10 pt-6">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="drop_commentary_tracks" {% if rules.drop_commentary_tracks %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Drop commentary tracks
+      </label>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Commentary detection patterns (regex, comma-separated)</label>
+        <input name="commentary_title_patterns" value="{{ rules.commentary_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="e.g. commentary">
+        <p class="font-body-md text-body-md text-on-surface-variant mt-1">Different muxers tag commentary tracks inconsistently — used to recognize one from its title when the file's own disposition flag doesn't say so. Only acts when "Drop commentary tracks" above is checked.</p>
+      </div>
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="drop_hearing_impaired_tracks" {% if rules.drop_hearing_impaired_tracks %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Drop hearing-impaired (SDH) subtitle tracks
+      </label>
+      <div>
+        <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Hearing-impaired detection patterns (regex, comma-separated)</label>
+        <input name="hearing_impaired_title_patterns" value="{{ rules.hearing_impaired_title_patterns | join(', ') }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="e.g. sdh, hearing.impaired">
+        <p class="font-body-md text-body-md text-on-surface-variant mt-1">Same idea, for SDH/hearing-impaired subtitles — only acts when "Drop hearing-impaired (SDH) subtitle tracks" above is checked.</p>
+      </div>
     </div>
     <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Rules</button>
   </form>

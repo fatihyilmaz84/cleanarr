@@ -99,7 +99,7 @@ conversion, so it looked "wrong" against the user's actual local time.
 - [x] New "Display" section on the Settings page — IANA timezone dropdown,
       defaults to UTC.
 
-## 5. Normalize track names across containers
+## 5. Normalize track names across containers — mostly done ✅
 
 Different muxers/tools tag the same kind of track differently (e.g. a
 commentary track's `title` might be "Commentary", "Director's Commentary",
@@ -107,19 +107,29 @@ commentary track's `title` might be "Commentary", "Director's Commentary",
 "SDH", "English (SDH)", "Hearing Impaired", or rely solely on the
 `disposition` flag).
 
-- [ ] Audit `app/analyzer.py`'s `MediaStream.from_ffprobe_stream` — right
-      now `is_commentary`/`is_hearing_impaired` come *only* from ffprobe's
-      `disposition` dict. Add a title-text fallback (regex/keyword match,
-      similar to the existing `drop_title_patterns` mechanism in
-      `app/rules.py`) for containers that don't set disposition flags but
-      do label it in the title.
+- [x] Title-text fallback for `is_commentary`/`is_hearing_impaired`
+      classification — implemented in `app/rules.py` (`_commentary_reason`/
+      `_hearing_impaired_reason`), not `app/analyzer.py` as originally
+      sketched, since the patterns needed to be *user-configurable*
+      (RuleConfig, not a hardcoded constant) — analyzer.py has no access to
+      rule config, it's a pure ffprobe-normalization layer. Checks the
+      disposition flag first, falls back to regex title-matching against
+      `RuleConfig.commentary_title_patterns` /
+      `hearing_impaired_title_patterns`. Ships with sensible non-empty
+      defaults (`["commentary"]` / `["sdh", "hearing.impaired"]`) — unlike
+      the language keep-lists, "commentary"/"SDH" are unambiguous signals,
+      no reason to make a user type them from scratch — fully editable in
+      Rules.
+- [x] New `drop_hearing_impaired_tracks` rule (mirrors the existing
+      `drop_commentary_tracks`) — previously `is_hearing_impaired` was
+      captured on every stream but nothing ever acted on it.
 - [ ] Normalize *display* of track titles in the Review Queue (currently
-      raw `s.title` shown as-is in `app/templates/review.html`) — e.g.
-      title-case, strip redundant codec/channel info already shown
-      elsewhere in the badge.
-- [ ] Consider a small canonical-name table (similar to
-      `app/languages.py`'s `LANGUAGE_OPTIONS`) if a clear common pattern
-      set emerges from real library data.
+      raw `s.title` shown as-is) — e.g. title-case, strip redundant
+      codec/channel info already shown elsewhere in the badge. Cosmetic,
+      not done — revisit if it turns out to matter in practice.
+- [ ] Canonical-name table (like `app/languages.py`'s `LANGUAGE_OPTIONS`) —
+      skipped; commentary/SDH turned out to need only two short pattern
+      lists, not a lookup table.
 
 ## Suggested order
 
@@ -127,4 +137,9 @@ commentary track's `title` might be "Commentary", "Director's Commentary",
 2. ~~Per-track selective apply (1)~~ — done.
 3. ~~Scheduler (3)~~ — done.
 4. ~~Job queue (2)~~ — done.
-5. **Track name normalization (5)** — small, independent; the only thing left open.
+5. ~~Track name normalization (5)~~ — mostly done (detection + new
+   drop_hearing_impaired_tracks rule); display cleanup and a canonical-name
+   table deliberately left open, not worth it yet.
+
+All originally-planned items are now addressed in some form. Nothing left
+queued unless something new comes up.

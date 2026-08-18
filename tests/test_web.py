@@ -81,6 +81,36 @@ def test_save_rules_via_form(client: TestClient):
     assert 'value="und"' in rules_page
 
 
+def test_rules_page_shows_default_commentary_and_hi_patterns_on_first_load(client: TestClient):
+    rules_page = client.get("/rules").text
+    assert 'name="commentary_title_patterns" value="commentary"' in rules_page
+    assert 'name="hearing_impaired_title_patterns" value="sdh, hearing.impaired"' in rules_page
+
+
+def test_save_commentary_and_hearing_impaired_settings_via_form(client: TestClient):
+    resp = client.post(
+        "/rules",
+        data={
+            "commentary_title_patterns": "commentary, cast chat",
+            "hearing_impaired_title_patterns": "sdh",
+            "drop_commentary_tracks": "on",
+            "drop_hearing_impaired_tracks": "on",
+        },
+    )
+    assert "Rules saved" in resp.text
+
+    rules = client.get("/api/settings").json()["rules"]
+    assert rules["commentary_title_patterns"] == ["commentary", "cast chat"]
+    assert rules["hearing_impaired_title_patterns"] == ["sdh"]
+    assert rules["drop_commentary_tracks"] is True
+    assert rules["drop_hearing_impaired_tracks"] is True
+
+    # re-populated on reload, same as the other pattern fields
+    rules_page = client.get("/rules").text
+    assert 'name="commentary_title_patterns" value="commentary, cast chat"' in rules_page
+    assert 'name="hearing_impaired_title_patterns" value="sdh"' in rules_page
+
+
 def test_save_media_paths_via_form(client: TestClient, media_dir: Path):
     resp = client.post("/settings/media-paths", data={"paths": f"{media_dir},movie\n"})
     assert resp.status_code == 200
