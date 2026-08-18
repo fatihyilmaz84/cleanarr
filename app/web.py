@@ -86,6 +86,7 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
     return {
         "request": request,
         "pending_review_count": stats["pending_review_count"],
+        "queued_count": stats["queued_count"],
         "current_job": current_job,
         "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],
@@ -152,6 +153,11 @@ async def ui_review(request: Request, session: AsyncSession = Depends(get_sessio
 
 @web_router.post("/review/{change_id}/approve")
 async def ui_approve(change_id: int, request: Request, session: AsyncSession = Depends(get_session)):
+    """Moves a change to `approved` (queued) — doesn't apply it. Applying
+    happens on the Queue page, one "Run Queue" pass at a time (see
+    ui_run_queue below), so several files can be reviewed and then applied
+    together instead of triggering a separate job per approval.
+    """
     change = await session.get(PendingChange, change_id)
     if change is not None:
         form = await request.form()
@@ -165,8 +171,7 @@ async def ui_approve(change_id: int, request: Request, session: AsyncSession = D
         change.status = ChangeStatus.approved
         session.add(change)
         await session.commit()
-        submit_apply_job(request.app.state.session_factory, request.app.state.job_manager, [change_id])
-    return _redirect("/review", "Applying — check back in a moment.")
+    return _redirect("/review", "Added to queue.")
 
 
 @web_router.post("/review/{change_id}/skip")
@@ -177,6 +182,34 @@ async def ui_skip(change_id: int, session: AsyncSession = Depends(get_session)):
         session.add(change)
         await session.commit()
     return _redirect("/review")
+
+
+@web_router.get("/queue")
+async def ui_queue(request: Request, session: AsyncSession = Depends(get_session)):
+    ctx = await _base_context(request, session)
+    ctx["items"] = await list_review_items(session, ChangeStatus.approved)
+    return templates.TemplateResponse(request, "queue.html", ctx)
+
+
+@web_router.post("/queue/run")
+async def ui_run_queue(request: Request, session: AsyncSession = Depends(get_session)):
+    queued = await list_review_items(session, ChangeStatus.approved)
+    change_ids = [i["id"] for i in queued]
+    if change_ids:
+        submit_apply_job(request.app.state.session_factory, request.app.state.job_manager, change_ids)
+        return _redirect("/queue", f"Running {len(change_ids)} queued change(s) — check back in a moment.")
+    return _redirect("/queue", "Queue is empty.")
+
+
+@web_router.post("/queue/{change_id}/remove")
+async def ui_remove_from_queue(change_id: int, session: AsyncSession = Depends(get_session)):
+    change = await session.get(PendingChange, change_id)
+    if change is not None and change.status == ChangeStatus.approved:
+        change.status = ChangeStatus.pending
+        change.overrides = None
+        session.add(change)
+        await session.commit()
+    return _redirect("/queue", "Removed from queue — back in the Review Queue.")
 
 
 @web_router.get("/history")

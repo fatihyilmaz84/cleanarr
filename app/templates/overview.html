@@ -10,17 +10,22 @@
 </section>
 
 <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
-  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+  <div class="md:col-span-3 glass-panel rounded-lg p-5">
     <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Pending Review</h3>
     <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ stats.pending_review_count }}</p>
     <a href="/review" class="font-label-caps text-label-caps text-primary mt-3 inline-block">Review now &rarr;</a>
   </div>
-  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+  <div class="md:col-span-3 glass-panel rounded-lg p-5">
+    <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Queued</h3>
+    <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ stats.queued_count }}</p>
+    <a href="/queue" class="font-label-caps text-label-caps text-primary mt-3 inline-block">View queue &rarr;</a>
+  </div>
+  <div class="md:col-span-3 glass-panel rounded-lg p-5">
     <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Space Reclaimed</h3>
     <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ "%.2f"|format(stats.total_bytes_reclaimed / 1e9) }} GB</p>
     <p class="font-body-md text-body-md text-on-surface-variant mt-1">across {{ stats.total_applied_count }} file(s)</p>
   </div>
-  <div class="md:col-span-4 glass-panel rounded-lg p-5">
+  <div class="md:col-span-3 glass-panel rounded-lg p-5">
     <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-2 border-b border-white/10 pb-2">Files Tracked</h3>
     <p class="font-headline-md text-headline-md text-on-surface mt-3">{{ stats.total_files }}</p>
   </div>

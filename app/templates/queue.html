@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Queue — Cleanarr{% endblock %}
+{% block page_title %}Queue{% endblock %}
+{% block content %}
+{% if items %}
+<div class="glass-panel rounded-lg p-4 flex items-center justify-between">
+  <span class="font-body-md text-body-md text-on-surface-variant">{{ items|length }} change(s) queued, nothing applied yet.</span>
+  <form method="post" action="/queue/run">
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Run Queue ({{ items|length }})</button>
+  </form>
+</div>
+<div class="space-y-4">
+  {% for item in items %}
+  <div class="glass-panel rounded-lg p-5">
+    <div class="flex justify-between items-start mb-3">
+      <div>
+        <h3 class="font-body-lg text-body-lg text-on-surface">{{ item.display_title or item.path }}</h3>
+        <p class="font-code-md text-[11px] text-on-surface-variant mt-1">{{ item.path }}</p>
+      </div>
+      <div class="flex gap-2 h-fit">
+        {% if item.original_language %}
+        <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant" title="Original language, from Sonarr/Radarr">{{ item.original_language }}</span>
+        {% endif %}
+        <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant">{{ item.library_type }}</span>
+      </div>
+    </div>
+    <div class="flex flex-wrap gap-2 mb-4">
+      {% for s in item.kept %}
+        <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded">KEEP {{ s.type }} {{ s.language or '?' }}</span>
+      {% endfor %}
+      {% for s in item.dropped %}
+        <span class="font-code-md text-[11px] text-tertiary bg-tertiary/10 px-2 py-1 rounded" title="{{ s.reason }}">DROP {{ s.type }} {{ s.language or '?' }}{% if s.title %} &quot;{{ s.title }}&quot;{% endif %}</span>
+      {% endfor %}
+    </div>
+    <form method="post" action="/queue/{{ item.id }}/remove">
+      <button type="submit" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-4 py-2 rounded-DEFAULT hover:bg-white/5 transition-colors">Remove from Queue</button>
+    </form>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="glass-panel rounded-lg p-8 text-center">
+  <p class="font-body-lg text-body-lg text-on-surface-variant">Nothing queued.</p>
+  <p class="font-body-md text-body-md text-on-surface-variant mt-2">Add items from the <a href="/review" class="text-primary">Review Queue</a> — pick which tracks to drop, then "Add to Queue". Queue up as many as you like, then come back here and run them together.</p>
+</div>
+{% endif %}
+{% endblock %}

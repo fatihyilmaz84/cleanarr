@@ -13,6 +13,12 @@ from app.models import ChangeStatus, HistoryEntry, MediaFile, PendingChange
 
 async def review_item(session: AsyncSession, change: PendingChange) -> dict:
     mf = await session.get(MediaFile, change.file_id)
+    # Overrides (see app/rules.py::apply_overrides) force-keep specific
+    # stream indices at apply time — reflect that here so "kept"/"dropped"
+    # always shows the *actual* plan, not just the raw rule proposal. For a
+    # still-pending item overrides is always empty, so this is a no-op there.
+    overrides = set(change.overrides or [])
+    effective = [{**p, "keep": True} if p["index"] in overrides else p for p in change.proposed]
     return {
         "id": change.id,
         "file_id": change.file_id,
@@ -23,8 +29,8 @@ async def review_item(session: AsyncSession, change: PendingChange) -> dict:
         "original_language": mf.original_language if mf else None,
         "status": change.status.value,
         "proposed": change.proposed,
-        "kept": [p for p in change.proposed if p["keep"]],
-        "dropped": [p for p in change.proposed if not p["keep"]],
+        "kept": [p for p in effective if p["keep"]],
+        "dropped": [p for p in effective if not p["keep"]],
         "error_message": change.error_message,
         "created_at": change.created_at,
     }
@@ -59,12 +65,14 @@ async def list_history_items(session: AsyncSession, limit: int = 50) -> list[dic
 
 async def overview_stats(session: AsyncSession) -> dict:
     pending = (await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.pending))).all()
+    queued = (await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.approved))).all()
     all_files = (await session.exec(select(MediaFile))).all()
     all_history = (await session.exec(select(HistoryEntry))).all()
 
     return {
         "total_files": len(all_files),
         "pending_review_count": len(pending),
+        "queued_count": len(queued),
         "total_bytes_reclaimed": sum(h.bytes_before - h.bytes_after for h in all_history),
         "total_applied_count": len(all_history),
     }

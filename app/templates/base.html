@@ -94,6 +94,7 @@
       <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Library</h3>
       <ul class="space-y-1">
         {{ nav_link("/review", "fact_check", "Review Queue", badge=pending_review_count) }}
+        {{ nav_link("/queue", "playlist_add_check", "Queue", badge=queued_count) }}
         {{ nav_link("/history", "history", "History") }}
       </ul>
     </div>

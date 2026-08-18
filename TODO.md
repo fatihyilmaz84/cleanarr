@@ -28,26 +28,33 @@ keep the subtitle" for one specific file.
       (`/api/review/approve-bulk`, and whatever UI Task 2 adds) — not done
       yet, out of scope for this pass.
 
-## 2. Job queue (queue-then-run, not apply-on-approve)
+## 2. Job queue (queue-then-run, not apply-on-approve) — done ✅
 
 Today, "Approve & Apply" immediately submits an apply job. Wanted instead:
 select multiple review items, queue them up, then hit one "Run Queue"
 action that processes everything at once.
 
-- [ ] Repurpose `ChangeStatus.approved` as the "queued, not yet run" state
-      (it's already a distinct status — currently just auto-followed by an
-      immediate `submit_apply_job` call in `app/web.py`'s `ui_approve`).
-- [ ] Review Queue: checkboxes per item + a "Queue Selected" bulk action
-      (the JSON API already has `/api/review/approve-bulk` for this — just
-      needs marking status without submitting a job, and a web UI form).
-- [ ] New `/queue` page: lists everything in `approved` status, with a
-      "Run Queue (N)" button that calls `submit_apply_job` with all of
-      their ids at once (this already supports a list of change_ids —
-      `app/actions.py::submit_apply_job` — just needs a UI entry point).
-- [ ] Let users remove an item from the queue (revert to `pending`) before
-      running it.
-- [ ] Depends on Task 1 if we want per-track overrides selectable *at
-      queue time* rather than only at approve time.
+- [x] Repurposed `ChangeStatus.approved` as the "queued, not yet run" state
+      — `app/web.py`'s `ui_approve` (Review Queue's "Add to Queue" button)
+      now only sets status + overrides, no longer calls `submit_apply_job`.
+      The JSON API's `/api/review/{id}/approve` and `/approve-bulk` are
+      unchanged (still apply immediately) — kept as the programmatic
+      "apply now" contract, distinct from the UI's queue-then-run flow.
+- [x] New `/queue` page: lists everything in `approved` status (via
+      `list_review_items(session, ChangeStatus.approved)`), with a
+      "Run Queue (N)" button that calls `submit_apply_job` with every
+      queued id at once, and a per-item "Remove from Queue" button
+      (reverts to `pending`, clears overrides).
+- [x] `queries.py::review_item` now applies overrides when computing
+      kept/dropped, so the Queue page shows the *actual* plan (post
+      per-track override) rather than the raw rule proposal — a no-op for
+      still-pending items, since overrides is always empty there.
+- [x] Overview page gained a "Queued" stat card + nav badge, mirroring the
+      existing "Pending Review" one.
+- [ ] Cross-item bulk-select on the Review Queue itself (checkbox per card
+      + "Queue Selected") — not done; today you queue one item at a time
+      from Review, which already covers "add tasks then tap run to run
+      them". Revisit only if that turns out to be too slow in practice.
 
 ## 3. Scheduler (e.g. "every night at 04:00, scan + apply") — done ✅
 
@@ -119,5 +126,5 @@ commentary track's `title` might be "Commentary", "Director's Commentary",
 1. ~~Timezone fix (4)~~ — done.
 2. ~~Per-track selective apply (1)~~ — done.
 3. ~~Scheduler (3)~~ — done.
-4. **Job queue (2)** — builds naturally on top of (1)'s override UI.
-5. **Track name normalization (5)** — small, independent; still open.
+4. ~~Job queue (2)~~ — done.
+5. **Track name normalization (5)** — small, independent; the only thing left open.

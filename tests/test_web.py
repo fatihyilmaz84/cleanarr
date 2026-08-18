@@ -46,7 +46,7 @@ def client(tmp_path, media_dir, monkeypatch):
 
 
 def test_empty_state_pages_render(client: TestClient):
-    for path in ["/", "/review", "/rules", "/settings", "/history", "/schedule"]:
+    for path in ["/", "/review", "/queue", "/rules", "/settings", "/history", "/schedule"]:
         resp = client.get(path)
         assert resp.status_code == 200, path
         assert "Cleanarr" in resp.text
@@ -131,6 +131,13 @@ def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
 
     resp = client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
     assert resp.status_code == 200
+
+    queue_page = client.get("/queue")
+    assert "DROP audio jpn" in queue_page.text  # effective plan shown, nothing applied yet
+    assert client.get("/api/history").json() == []
+
+    resp = client.post("/queue/run")
+    assert resp.status_code == 200
     _wait_for_idle(client)
 
     history_page = client.get("/history")
@@ -192,6 +199,11 @@ def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
 
         # Only confirm the audio drop — leave the tur subtitle's checkbox off.
         c.post(f"/review/{change['id']}/approve", data={"drop_index": str(audio_index)})
+
+        queue_page = c.get("/queue").text
+        assert "DROP audio jpn" in queue_page and "DROP subtitle tur" not in queue_page  # override reflected
+
+        c.post("/queue/run")
         _wait_for_idle(c)
 
         history = c.get("/api/history").json()
@@ -234,3 +246,41 @@ def test_schedule_defaults_to_every_day_when_no_days_checked(client: TestClient)
     client.post("/schedule", data={"hour": "4", "minute": "0"})  # no days_of_week at all
     page = client.get("/schedule").text
     assert "every day" in page
+
+
+def test_queue_run_and_remove(client: TestClient, media_dir: Path):
+    client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
+    client.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})
+    client.post("/scan")
+    _wait_for_idle(client)
+
+    assert "Nothing queued" in client.get("/queue").text
+    empty_run = client.post("/queue/run")
+    assert "Queue is empty" in empty_run.text
+    assert client.get("/api/history").json() == []
+
+    pending = client.get("/api/review", params={"status": "pending"}).json()
+    change_id = pending[0]["id"]
+    drop_indices = [str(p["index"]) for p in pending[0]["proposed"] if not p["keep"]]
+    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
+
+    # queued, not yet applied
+    assert client.get("/api/review", params={"status": "pending"}).json() == []
+    queue_page = client.get("/queue").text
+    assert "Run Queue (1)" in queue_page
+    assert client.get("/api/overview").json()["queued_count"] == 1
+    assert client.get("/api/history").json() == []
+
+    # remove it -> back to pending, nothing applied
+    client.post(f"/queue/{change_id}/remove")
+    assert "Nothing queued" in client.get("/queue").text
+    assert len(client.get("/api/review", params={"status": "pending"}).json()) == 1
+
+    # re-queue and actually run it this time
+    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
+    resp = client.post("/queue/run")
+    assert "Running 1 queued change" in resp.text
+    _wait_for_idle(client)
+
+    assert len(client.get("/api/history").json()) == 1
+    assert "Nothing queued" in client.get("/queue").text
