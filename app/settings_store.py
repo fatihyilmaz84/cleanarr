@@ -104,7 +104,18 @@ async def set_rule_presets(session: AsyncSession, presets: list[RulePreset]) -> 
 
 async def get_normalizer_presets(session: AsyncSession) -> list[NormalizerPreset]:
     data = await _get(session, NORMALIZER_PRESETS_KEY)
-    return [NormalizerPreset.model_validate(p) for p in data.get("presets", [])] if data else []
+    if not data:
+        return []
+    # Saved presets need the same superseded-default upgrade as the standalone
+    # config below — a preset saved before the fix would otherwise keep the
+    # broken pattern, and schedules run against presets.
+    presets = []
+    for p in data.get("presets", []):
+        p = dict(p)
+        if isinstance(p.get("config"), dict):
+            p["config"] = _upgrade_superseded_defaults(dict(p["config"]))
+        presets.append(NormalizerPreset.model_validate(p))
+    return presets
 
 
 async def set_normalizer_presets(session: AsyncSession, presets: list[NormalizerPreset]) -> None:
@@ -232,9 +243,33 @@ async def set_schedules(session: AsyncSession, schedules: list[Schedule]) -> Non
     await _set(session, SCHEDULES_KEY, {"schedules": [s.model_dump() for s in schedules]})
 
 
+# Pattern sets whose shipped default was later corrected. A *new* field
+# picks up its default automatically, but a field already present in a saved
+# config keeps whatever was stored — so a config saved before the fix would
+# silently keep the broken pattern forever. Upgraded on read, and only when
+# it still holds the exact superseded default: that identifies a value the
+# user never customized, so this restores the intended behaviour without
+# overriding a deliberate choice.
+_NORMALIZER_PATTERN_UPGRADES: dict[str, tuple[list[str], list[str]]] = {
+    # "closed.caption" alone missed the forms that actually occur
+    # ("English (CC)", "English [CC]") and, worse, couldn't match the "CC"
+    # label it produced — so the next pass stripped the marker back off.
+    "cc_title_patterns": (["closed.caption"], ["closed.caption", "\\bcc\\b"]),
+}
+
+
+def _upgrade_superseded_defaults(data: dict) -> dict:
+    for field, (superseded, replacement) in _NORMALIZER_PATTERN_UPGRADES.items():
+        if data.get(field) == superseded:
+            data[field] = replacement
+    return data
+
+
 async def get_normalizer_config(session: AsyncSession) -> NormalizerConfig:
     data = await _get(session, NORMALIZER_CONFIG_KEY)
-    return NormalizerConfig.model_validate(data) if data else NormalizerConfig()
+    if not data:
+        return NormalizerConfig()
+    return NormalizerConfig.model_validate(_upgrade_superseded_defaults(dict(data)))
 
 
 async def set_normalizer_config(session: AsyncSession, config: NormalizerConfig) -> None:

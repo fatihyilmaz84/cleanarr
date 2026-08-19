@@ -208,3 +208,63 @@ def test_normalizing_an_already_normalized_file_proposes_nothing(streams):
     first, second = _renormalize(streams, config)
     assert any(n.changed for n in first), "fixture should need normalizing on the first pass"
     assert not any(n.changed for n in second), [n.reason for n in second]
+
+
+# --- Superseded-default upgrade --------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_config_saved_before_the_cc_fix_is_upgraded_on_read(tmp_path):
+    """A *new* field picks up its default automatically, but a field already
+    present in a saved config keeps whatever was stored — so an install that
+    had ever saved normalizer settings would have kept the broken CC pattern
+    forever, and the fix would look like it did nothing.
+    """
+    from app.db import init_db, make_engine, make_session_factory
+    from app.models import AppSetting
+    from app.settings_store import NORMALIZER_CONFIG_KEY, get_normalizer_config
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    factory = make_session_factory(engine)
+
+    stored = NormalizerConfig().model_dump()
+    stored["cc_title_patterns"] = ["closed.caption"]  # the superseded default
+    async with factory() as session:
+        session.add(AppSetting(key=NORMALIZER_CONFIG_KEY, value_json=stored))
+        await session.commit()
+
+    async with factory() as session:
+        config = await get_normalizer_config(session)
+
+    assert config.cc_title_patterns == ["closed.caption", "\\bcc\\b"]
+    streams = [make_stream(0, "subtitle", language="eng", title="English (CC)")]
+    assert title_of(streams, config)[0] == "English - CC"
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_customized_cc_pattern_is_never_overwritten(tmp_path):
+    """The upgrade only fires on the exact superseded default — anything the
+    user actually chose is left alone.
+    """
+    from app.db import init_db, make_engine, make_session_factory
+    from app.models import AppSetting
+    from app.settings_store import NORMALIZER_CONFIG_KEY, get_normalizer_config
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    factory = make_session_factory(engine)
+
+    stored = NormalizerConfig().model_dump()
+    stored["cc_title_patterns"] = ["my-own-pattern"]
+    async with factory() as session:
+        session.add(AppSetting(key=NORMALIZER_CONFIG_KEY, value_json=stored))
+        await session.commit()
+
+    async with factory() as session:
+        config = await get_normalizer_config(session)
+
+    assert config.cc_title_patterns == ["my-own-pattern"]
+    await engine.dispose()
