@@ -39,17 +39,61 @@
         {% endfor %}
       </div>
     </div>
-    <div class="space-y-2">
-      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-        <input type="checkbox" name="apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
-        Also apply anything already sitting in the Queue
+    <div class="tech-border rounded-DEFAULT p-4 space-y-3">
+      <label class="flex items-center gap-3 font-body-lg text-body-lg text-on-surface">
+        <input type="checkbox" name="run_clean" checked class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Clean — remove unwanted tracks
       </label>
-      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">Safe on its own — these are changes you already reviewed and approved, this just runs them on a schedule instead of a manual "Run Queue" click.</p>
-      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-        <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
-        Also apply this scan's own findings automatically (no review)
+      <div class="ml-7 space-y-3">
+        <div>
+          <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Rules to use</label>
+          <select name="rule_preset_id" class="bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+            <option value="">Default rules</option>
+            {% for preset in rule_presets %}
+            <option value="{{ preset.id }}">{{ preset.name }}</option>
+            {% endfor %}
+          </select>
+          <p class="font-body-md text-[13px] text-on-surface-variant mt-1">Manage these under <a href="/rules" class="text-primary">Rules</a>. Whichever set proposes a change is also the set used when that change is later applied.</p>
+        </div>
+        <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          Also apply anything already sitting in the Queue
+        </label>
+        <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">Safe on its own — these are changes you already reviewed and approved, this just runs them on a schedule instead of a manual "Run Queue" click.</p>
+        <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          Also apply this scan's own findings automatically (no review)
+        </label>
+        <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">More aggressive — whatever this run's scan proposes gets applied with no human ever looking at it first. Off by default; leave it off unless you fully trust your Rules.</p>
+      </div>
+    </div>
+
+    <div class="tech-border rounded-DEFAULT p-4 space-y-3">
+      <label class="flex items-center gap-3 font-body-lg text-body-lg text-on-surface">
+        <input type="checkbox" name="run_normalize" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Normalize — rename/retag tracks
       </label>
-      <p class="font-body-md text-[13px] text-on-surface-variant ml-7">More aggressive — whatever this run's scan proposes gets applied with no human ever looking at it first. Off by default; leave it off unless you fully trust your Rules.</p>
+      <div class="ml-7 space-y-3">
+        <div>
+          <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Normalizer settings to use</label>
+          <select name="normalizer_preset_id" class="bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+            <option value="">Default settings</option>
+            {% for preset in normalizer_presets %}
+            <option value="{{ preset.id }}">{{ preset.name }}</option>
+            {% endfor %}
+          </select>
+          <p class="font-body-md text-[13px] text-on-surface-variant mt-1">Manage these under <a href="/normalize/settings" class="text-primary">Normalize Settings</a>. Runs after the clean pass, so it sees whatever that just found and skips tracks queued for removal.</p>
+        </div>
+        <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="normalize_apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          Also apply anything already in the Normalize Queue
+        </label>
+        <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="normalize_auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          Also write this pass's own renames automatically (no review)
+        </label>
+        <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">Lower-stakes than the cleaner's equivalent — normalizing only rewrites container metadata via <span class="font-code-md">mkvpropedit</span>, it never removes a track or touches the media itself. Still off by default.</p>
+      </div>
     </div>
     <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add Schedule</button>
   </form>
@@ -61,14 +105,20 @@
   {% set s = entry.schedule %}
   <div class="glass-panel rounded-lg p-4 flex items-center justify-between gap-4">
     <div>
-      <div class="flex items-center gap-2 mb-1">
+      <div class="flex items-center flex-wrap gap-2 mb-1">
         <span class="status-dot {{ 'status-healthy' if s.enabled else '' }}" style="{% if not s.enabled %}background-color:#555;{% endif %}"></span>
         <span class="font-body-md text-body-md text-on-surface">{{ s.label or "Schedule" }}</span>
-        {% if s.apply_queued %}
-        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-secondary/30 text-secondary" title="Also applies whatever is already sitting in the Queue">APPLY QUEUE</span>
+        {% if s.run_clean %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-primary/30 text-primary" title="Rules to use: {{ entry.rule_preset_label }}">CLEAN · {{ entry.rule_preset_label }}</span>
         {% endif %}
-        {% if s.auto_apply %}
-        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-tertiary/30 text-tertiary" title="Applies this run's own scan findings automatically, no review">AUTO-APPLY</span>
+        {% if s.run_normalize %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-primary/30 text-primary" title="Normalizer settings to use: {{ entry.normalizer_preset_label }}">NORMALIZE · {{ entry.normalizer_preset_label }}</span>
+        {% endif %}
+        {% if s.apply_queued or s.normalize_apply_queued %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-secondary/30 text-secondary" title="Also applies what is already sitting in the {{ 'Queue' if s.apply_queued else '' }}{{ ' and ' if s.apply_queued and s.normalize_apply_queued else '' }}{{ 'Normalize Queue' if s.normalize_apply_queued else '' }}">APPLY QUEUE</span>
+        {% endif %}
+        {% if s.auto_apply or s.normalize_auto_apply %}
+        <span class="font-label-caps text-label-caps px-2 py-0.5 rounded-full border border-tertiary/30 text-tertiary" title="Applies this run's own findings automatically, no review">AUTO-APPLY</span>
         {% endif %}
       </div>
       <p class="font-code-md text-[11px] text-on-surface-variant">

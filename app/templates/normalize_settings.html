@@ -9,7 +9,25 @@
   </div>
 </div>
 <div class="glass-panel rounded-lg p-6 max-w-2xl">
-  <form method="post" action="/normalize/settings" class="space-y-6">
+  <div class="flex items-center justify-between mb-4 border-b border-white/10 pb-3">
+    <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant">Editing</h3>
+      <p class="font-body-lg text-body-lg text-on-surface mt-0.5">
+        {% if editing_preset %}Preset: {{ editing_preset.name }}{% else %}Default settings{% endif %}
+      </p>
+    </div>
+    {% if editing_preset %}
+    <a href="/normalize/settings" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Back to Default</a>
+    {% endif %}
+  </div>
+  <p class="font-body-md text-[13px] text-on-surface-variant mb-4">
+    {% if editing_preset %}
+    Applies only to schedules with the "{{ editing_preset.name }}" preset attached — see <a href="/schedule" class="text-primary">Schedule</a>. Manual "Scan for Normalization" always uses Default.
+    {% else %}
+    Used by manual "Scan for Normalization" and by any schedule with no preset attached.
+    {% endif %}
+  </p>
+  <form method="post" action="{{ form_action }}" class="space-y-6">
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Naming style</label>
       <select name="naming_style" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
@@ -80,6 +98,32 @@
     </div>
 
     <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Normalizer Settings</button>
+  </form>
+</div>
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-1 border-b border-white/10 pb-2">Normalizer presets</h3>
+  <p class="font-body-md text-[13px] text-on-surface-variant mt-3 mb-4">Named normalizer profiles you can attach to a schedule. A new preset starts as a copy of your current Default settings; edit it from here to make it differ.</p>
+  {% if presets %}
+  <div class="space-y-2 mb-4">
+    {% for preset in presets %}
+    <div class="flex items-center justify-between gap-3 tech-border rounded-DEFAULT px-3 py-2">
+      <span class="font-body-md text-body-md text-on-surface">{{ preset.name }}</span>
+      <div class="flex gap-2 flex-shrink-0">
+        <a href="/normalize/settings?preset={{ preset.id }}" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">Edit</a>
+        <form method="post" action="/normalize/settings/presets/{{ preset.id }}/delete">
+          <button class="font-label-caps text-label-caps border border-white/10 text-tertiary px-3 py-1.5 rounded-DEFAULT hover:bg-tertiary/10 transition-colors">Delete</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/normalize/settings/presets" class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-[200px]">
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">New preset name</label>
+      <input name="name" placeholder="e.g. Plex-friendly" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+    </div>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Create Preset</button>
   </form>
 </div>
 {% endblock %}

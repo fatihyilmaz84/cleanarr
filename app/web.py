@@ -28,16 +28,20 @@ from app.settings_store import (
     ArrConfig,
     DisplaySettings,
     MediaPath,
+    RulePreset,
     Schedule,
     get_arr_config,
     get_display_settings,
     get_media_paths,
+    get_normalizer_presets,
     get_rule_config,
+    get_rule_presets,
     get_schedules,
     set_arr_config,
     set_display_settings,
     set_media_paths,
     set_rule_config,
+    set_rule_presets,
     set_schedules,
 )
 
@@ -303,9 +307,21 @@ def _extra_codes(codes: list[str]) -> str:
 
 @web_router.get("/rules")
 async def ui_rules(request: Request, session: AsyncSession = Depends(get_session)):
+    """One form, two targets: with no `?preset=` it edits the Default rules
+    (what manual Scan Now uses); with one, it edits that saved RulePreset
+    instead. An unknown/deleted id silently falls back to Default rather
+    than 404ing — same forgiving behavior as resolve_rule_config.
+    """
     ctx = await _base_context(request, session)
-    rules = await get_rule_config(session)
+    presets = await get_rule_presets(session)
+    preset_id = request.query_params.get("preset") or None
+    editing = next((p for p in presets if p.id == preset_id), None)
+
+    rules = editing.config if editing else await get_rule_config(session)
     ctx["rules"] = rules
+    ctx["presets"] = presets
+    ctx["editing_preset"] = editing
+    ctx["form_action"] = f"/rules?preset={editing.id}" if editing else "/rules"
     ctx["language_options"] = LANGUAGE_OPTIONS
     ctx["selected_audio_languages"] = _selected_language_names(rules.audio_keep_languages)
     ctx["selected_subtitle_languages"] = _selected_language_names(rules.subtitle_keep_languages)
@@ -355,8 +371,53 @@ async def ui_save_rules(request: Request, session: AsyncSession = Depends(get_se
         drop_hearing_impaired_tracks="drop_hearing_impaired_tracks" in form,
         always_keep_original_language="always_keep_original_language" in form,
     )
+
+    preset_id = request.query_params.get("preset") or None
+    if preset_id:
+        presets = await get_rule_presets(session)
+        for preset in presets:
+            if preset.id == preset_id:
+                preset.config = rules
+                await set_rule_presets(session, presets)
+                return _redirect(f"/rules?preset={preset_id}", f"Preset '{preset.name}' saved.")
+        # Preset deleted in another tab between GET and POST — don't
+        # silently write these edits into Default instead.
+        return _redirect("/rules", "That preset no longer exists — nothing saved.")
+
     await set_rule_config(session, rules)
     return _redirect("/rules", "Rules saved.")
+
+
+@web_router.post("/rules/presets")
+async def ui_add_rule_preset(request: Request, session: AsyncSession = Depends(get_session)):
+    """Creates a named preset seeded from the current Default rules — you
+    then Edit it to diverge. Seeding from Default (rather than from empty)
+    means a new preset never starts out as an inert "keep nothing"
+    config that a schedule could quietly attach to.
+    """
+    form = await request.form()
+    name = form.get("name", "").strip()
+    if not name:
+        return _redirect("/rules", "Preset needs a name — not saved.")
+
+    presets = await get_rule_presets(session)
+    if any(p.name.lower() == name.lower() for p in presets):
+        return _redirect("/rules", f"A preset named '{name}' already exists.")
+
+    presets.append(RulePreset(name=name, config=await get_rule_config(session)))
+    await set_rule_presets(session, presets)
+    return _redirect("/rules", f"Preset '{name}' created from your current rules.")
+
+
+@web_router.post("/rules/presets/{preset_id}/delete")
+async def ui_delete_rule_preset(preset_id: str, session: AsyncSession = Depends(get_session)):
+    presets = await get_rule_presets(session)
+    remaining = [p for p in presets if p.id != preset_id]
+    await set_rule_presets(session, remaining)
+    # Schedules and already-proposed changes still referencing this id fall
+    # back to Default (see resolve_rule_config) rather than breaking, so
+    # deleting one is never destructive to a queued change.
+    return _redirect("/rules", "Preset deleted — anything using it falls back to Default rules.")
 
 
 @web_router.get("/settings")
@@ -437,6 +498,19 @@ async def ui_schedule(request: Request, session: AsyncSession = Depends(get_sess
     except ZoneInfoNotFoundError:
         tz = ZoneInfo("UTC")
     now = datetime.now(tz)
+
+    rule_presets = await get_rule_presets(session)
+    normalizer_presets = await get_normalizer_presets(session)
+    rule_preset_names = {p.id: p.name for p in rule_presets}
+    normalizer_preset_names = {p.id: p.name for p in normalizer_presets}
+
+    def _preset_label(names: dict[str, str], preset_id: str | None) -> str:
+        # A schedule can outlive the preset it points at; show that plainly
+        # rather than a bare id, since the run will fall back to Default.
+        if not preset_id:
+            return "Default"
+        return names.get(preset_id, "deleted preset → Default")
+
     ctx["schedules"] = [
         {
             "schedule": s,
@@ -447,10 +521,14 @@ async def ui_schedule(request: Request, session: AsyncSession = Depends(get_sess
                 if s.end_hour is not None
                 else f"{s.hour:02d}:{s.minute:02d}"
             ),
+            "rule_preset_label": _preset_label(rule_preset_names, s.rule_preset_id),
+            "normalizer_preset_label": _preset_label(normalizer_preset_names, s.normalizer_preset_id),
         }
         for s in schedules
     ]
     ctx["day_names"] = DAY_NAMES
+    ctx["rule_presets"] = rule_presets
+    ctx["normalizer_presets"] = normalizer_presets
     return templates.TemplateResponse(request, "schedule.html", ctx)
 
 
@@ -483,6 +561,11 @@ async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_
         return _redirect("/schedule", "Invalid time — not saved.")
     days_of_week = [int(d) for d in form.getlist("days_of_week")]
 
+    run_clean = "run_clean" in form
+    run_normalize = "run_normalize" in form
+    if not run_clean and not run_normalize:
+        return _redirect("/schedule", "Pick at least one of Clean or Normalize — nothing saved.")
+
     schedules = await get_schedules(session)
     schedules.append(
         Schedule(
@@ -492,8 +575,15 @@ async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_
             end_hour=end_hour,
             end_minute=end_minute,
             days_of_week=days_of_week or list(range(7)),
+            run_clean=run_clean,
+            # Empty string (the "Default" option) means no preset attached.
+            rule_preset_id=form.get("rule_preset_id", "").strip() or None,
             auto_apply="auto_apply" in form,
             apply_queued="apply_queued" in form,
+            run_normalize=run_normalize,
+            normalizer_preset_id=form.get("normalizer_preset_id", "").strip() or None,
+            normalize_auto_apply="normalize_auto_apply" in form,
+            normalize_apply_queued="normalize_apply_queued" in form,
         )
     )
     await set_schedules(session, schedules)

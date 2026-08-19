@@ -41,7 +41,8 @@ async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(SQLModel.metadata.create_all)
         await _add_missing_columns(conn, "media_files", {"original_language": "VARCHAR"})
-        await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON"})
+        await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON", "rule_preset_id": "VARCHAR"})
+        await _add_missing_columns(conn, "normalization_changes", {"normalizer_preset_id": "VARCHAR"})
         await _add_missing_index(conn, "ix_pending_changes_status", "pending_changes", "status")
         await _add_missing_index(conn, "ix_normalization_changes_status", "normalization_changes", "status")
 

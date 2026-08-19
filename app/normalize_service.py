@@ -32,7 +32,15 @@ class NormalizeScanSummary:
     files_total: int = 0  # known upfront, for progress reporting
     files_considered: int = 0
     files_with_changes: int = 0
+    # NormalizationChange.id for every change this run itself created or
+    # updated — lets a scheduled normalize_auto_apply act on exactly what
+    # this run produced instead of re-querying and sweeping up unrelated
+    # pending suggestions. Mirrors ScanSummary.pending_change_ids.
+    change_ids: list[int] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
+    # True if a `deadline` was hit before every file could be considered —
+    # not an error, the rest is just left for the next run.
+    stopped_early: bool = False
 
 
 def _stream_from_record(record: StreamRecord) -> MediaStream:
@@ -89,7 +97,15 @@ async def propose_normalizations(
     session: AsyncSession,
     config: NormalizerConfig,
     progress_cb: Callable[[NormalizeScanSummary], None] | None = None,
+    deadline: datetime | None = None,
+    normalizer_preset_id: str | None = None,
 ) -> NormalizeScanSummary:
+    """`normalizer_preset_id` identifies which saved NormalizerPreset
+    `config` came from (None = Default) and is stamped onto each proposed
+    change so applying it re-decides with the same config. `deadline`, if
+    given, stops the pass between files — this is a pure DB+CPU pass with
+    no partial-write risk, so stopping is always safe here.
+    """
     summary = NormalizeScanSummary()
 
     media_files = (await session.exec(select(MediaFile))).all()
@@ -122,16 +138,25 @@ async def propose_normalizations(
     ).all()
     pending_change_by_file: dict[int, PendingChange] = {c.file_id: c for c in active_pending_changes}
 
+    # Pending *and* approved — a change already queued must be updated in
+    # place on re-propose, not left alone while a second row is created for
+    # the same file (the duplicate-queue-entry bug fixed in app/scanner.py;
+    # the normalizer had the same shape).
     existing_norm_changes = (
         await session.exec(
             select(NormalizationChange).where(
-                NormalizationChange.file_id.in_(file_ids), NormalizationChange.status == ChangeStatus.pending
+                NormalizationChange.file_id.in_(file_ids),
+                NormalizationChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
             )
         )
     ).all()
     existing_norm_by_file: dict[int, NormalizationChange] = {c.file_id: c for c in existing_norm_changes}
 
     for media_file in media_files:
+        if deadline is not None and _now() >= deadline:
+            summary.stopped_early = True
+            break
+
         summary.files_considered += 1
         records = records_by_file.get(media_file.id, [])
         if not records:
@@ -156,10 +181,25 @@ async def propose_normalizations(
             proposed = [_serialize(n) for n in normalizations]
             if existing:
                 existing.proposed = proposed
+                # Re-stamped, not preserved — same reasoning as
+                # app/scanner.py: the proposal was just recomputed under
+                # *this* config, so applying it must use that config.
+                existing.normalizer_preset_id = normalizer_preset_id
                 existing.updated_at = _now()
                 session.add(existing)
+                await session.flush()
+                if existing.status == ChangeStatus.pending:
+                    summary.change_ids.append(existing.id)
             else:
-                session.add(NormalizationChange(file_id=media_file.id, status=ChangeStatus.pending, proposed=proposed))
+                new_change = NormalizationChange(
+                    file_id=media_file.id,
+                    status=ChangeStatus.pending,
+                    proposed=proposed,
+                    normalizer_preset_id=normalizer_preset_id,
+                )
+                session.add(new_change)
+                await session.flush()
+                summary.change_ids.append(new_change.id)
         elif existing:
             # File now matches the naming scheme (e.g. config changed since
             # it was queued) — the stale suggestion no longer applies.

@@ -80,6 +80,14 @@ class PendingChange(SQLModel, table=True):
     # app/rules.py::apply_overrides. NULL/None for rows from before this
     # column existed, meaning no overrides.
     overrides: list | None = Field(default=None, sa_column=Column(JSON))
+    # Which saved RulePreset proposed this change (see
+    # app/settings_store.py::RulePreset), or NULL for the Default rules.
+    # Applying re-decides from scratch rather than trusting `proposed`
+    # (see app/apply.py) — it must re-decide with the *same* rules that
+    # produced the proposal, or what gets dropped won't match what was
+    # shown/approved. Resolved via resolve_rule_config, which falls back to
+    # Default if the preset has since been deleted.
+    rule_preset_id: str | None = None
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
@@ -107,6 +115,11 @@ class NormalizationChange(SQLModel, table=True):
     # despite the normalizer proposing a change — see
     # app/normalizer.py::apply_overrides.
     overrides: list | None = Field(default=None, sa_column=Column(JSON))
+    # Which saved NormalizerPreset proposed this, or NULL for the Normalize
+    # Settings page's Default config. Same reasoning as
+    # PendingChange.rule_preset_id: apply_normalization_change re-decides
+    # from scratch, so it has to use the config that produced the proposal.
+    normalizer_preset_id: str | None = None
     error_message: str | None = None
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)

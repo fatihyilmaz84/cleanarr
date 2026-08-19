@@ -21,6 +21,8 @@ ARR_CONFIG_KEY = "arr_config"
 DISPLAY_SETTINGS_KEY = "display_settings"
 SCHEDULES_KEY = "schedules"
 NORMALIZER_CONFIG_KEY = "normalizer_config"
+RULE_PRESETS_KEY = "rule_presets"
+NORMALIZER_PRESETS_KEY = "normalizer_presets"
 
 
 class ArrConfig(BaseModel):
@@ -62,6 +64,76 @@ async def get_rule_config(session: AsyncSession) -> RuleConfig:
 
 async def set_rule_config(session: AsyncSession, config: RuleConfig) -> None:
     await _set(session, RULES_KEY, config.model_dump())
+
+
+class RulePreset(BaseModel):
+    """A named, saved RuleConfig that a Schedule can point at (see
+    Schedule.rule_preset_id) — e.g. a gentle "Nightly" set and an
+    aggressive "Weekly deep clean" set, each attached to its own schedule.
+
+    Purely additive: the Rules page's own config stays the unnamed
+    "Default", used by manual Scan Now and by any schedule with no preset
+    attached. Nothing referencing a preset is ever hard-broken by deleting
+    it — see resolve_rule_config, which falls back to Default.
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = ""
+    config: RuleConfig = Field(default_factory=RuleConfig)
+
+
+class NormalizerPreset(BaseModel):
+    """NormalizerConfig equivalent of RulePreset — the normalizer is an
+    independent system from the drop engine (see app/normalizer.py), so it
+    gets its own separate preset list rather than sharing one.
+    """
+
+    id: str = Field(default_factory=lambda: uuid.uuid4().hex)
+    name: str = ""
+    config: NormalizerConfig = Field(default_factory=NormalizerConfig)
+
+
+async def get_rule_presets(session: AsyncSession) -> list[RulePreset]:
+    data = await _get(session, RULE_PRESETS_KEY)
+    return [RulePreset.model_validate(p) for p in data.get("presets", [])] if data else []
+
+
+async def set_rule_presets(session: AsyncSession, presets: list[RulePreset]) -> None:
+    await _set(session, RULE_PRESETS_KEY, {"presets": [p.model_dump() for p in presets]})
+
+
+async def get_normalizer_presets(session: AsyncSession) -> list[NormalizerPreset]:
+    data = await _get(session, NORMALIZER_PRESETS_KEY)
+    return [NormalizerPreset.model_validate(p) for p in data.get("presets", [])] if data else []
+
+
+async def set_normalizer_presets(session: AsyncSession, presets: list[NormalizerPreset]) -> None:
+    await _set(session, NORMALIZER_PRESETS_KEY, {"presets": [p.model_dump() for p in presets]})
+
+
+async def resolve_rule_config(session: AsyncSession, preset_id: str | None) -> RuleConfig:
+    """The RuleConfig a run/apply identified by `preset_id` should use.
+
+    `None` means the Default (the Rules page's own config). An id that no
+    longer resolves — the preset was deleted after a schedule or a proposed
+    change was stamped with it — also falls back to Default rather than
+    raising: a stale reference must never wedge a scheduled run or block
+    an already-queued change from being applied.
+    """
+    if preset_id:
+        for preset in await get_rule_presets(session):
+            if preset.id == preset_id:
+                return preset.config
+    return await get_rule_config(session)
+
+
+async def resolve_normalizer_config(session: AsyncSession, preset_id: str | None) -> NormalizerConfig:
+    """NormalizerConfig equivalent of resolve_rule_config, same fallback."""
+    if preset_id:
+        for preset in await get_normalizer_presets(session):
+            if preset.id == preset_id:
+                return preset.config
+    return await get_normalizer_config(session)
 
 
 class MediaPath(BaseModel):
@@ -110,6 +182,17 @@ class Schedule(BaseModel):
     minute: int = 0
     # Python's date.weekday(): 0=Monday .. 6=Sunday. Defaults to every day.
     days_of_week: list[int] = Field(default_factory=lambda: list(range(7)))
+
+    # --- Cleaning (the rule-based track remover, app/rules.py) ---
+    # On by default: a schedule created before this field existed, and the
+    # form's own default, both mean "this is a cleaning schedule".
+    run_clean: bool = True
+    # Which saved RulePreset the cleaning scan proposes with. None = the
+    # Rules page's own Default config. The id is also stamped onto every
+    # PendingChange this run produces (see app/scanner.py), so applying it
+    # later re-decides with the *same* rules that proposed it, no matter
+    # what triggers the apply.
+    rule_preset_id: str | None = None
     # Scanning only ever proposes changes for review — this is the one
     # explicit opt-in to apply what *this run's own scan* finds, unattended
     # and unreviewed. Off by default.
@@ -119,6 +202,16 @@ class Schedule(BaseModel):
     # auto_apply — a human already confirmed these specific changes, this
     # just runs them on a schedule instead of a manual "Run Queue" click.
     apply_queued: bool = False
+
+    # --- Normalizing (the track metadata normalizer, app/normalizer.py) ---
+    # Off by default so existing schedules keep doing exactly what they did
+    # before this existed. The normalizer is an independent system, so it
+    # gets its own preset and its own pair of apply opt-ins rather than
+    # riding on the cleaning ones.
+    run_normalize: bool = False
+    normalizer_preset_id: str | None = None
+    normalize_auto_apply: bool = False
+    normalize_apply_queued: bool = False
     # Optional end of the run window (e.g. hour=4/end_hour=6 -> "04:00-06:00").
     # Both None means "no limit, run to completion" (the old, still-default
     # behavior). A run that hits the deadline stops *between* files — it

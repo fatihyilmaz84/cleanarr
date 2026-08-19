@@ -281,6 +281,7 @@ def test_schedule_add_toggle_delete_via_form(client: TestClient):
             "hour": "4",
             "minute": "30",
             "days_of_week": ["0", "2", "4"],
+            "run_clean": "on",
             "auto_apply": "on",
         },
     )
@@ -305,7 +306,7 @@ def test_schedule_add_toggle_delete_via_form(client: TestClient):
 
 
 def test_schedule_defaults_to_every_day_when_no_days_checked(client: TestClient):
-    client.post("/schedule", data={"hour": "4", "minute": "0"})  # no days_of_week at all
+    client.post("/schedule", data={"hour": "4", "minute": "0", "run_clean": "on"})  # no days_of_week at all
     page = client.get("/schedule").text
     assert "every day" in page
 
@@ -313,7 +314,7 @@ def test_schedule_defaults_to_every_day_when_no_days_checked(client: TestClient)
 def test_schedule_with_end_time_shows_window_and_apply_queued_badge(client: TestClient):
     resp = client.post(
         "/schedule",
-        data={"hour": "4", "minute": "0", "end_hour": "6", "end_minute": "0", "apply_queued": "on"},
+        data={"hour": "4", "minute": "0", "end_hour": "6", "end_minute": "0", "run_clean": "on", "apply_queued": "on"},
     )
     assert "04:00-06:00" in resp.text
     assert "APPLY QUEUE" in resp.text
@@ -327,7 +328,7 @@ async def _get_schedule(session_factory):
 def test_schedule_zero_length_window_is_normalized_to_no_window(client: TestClient):
     # end time identical to the start time is meaningless — treated the
     # same as leaving End blank entirely.
-    client.post("/schedule", data={"hour": "4", "minute": "30", "end_hour": "4", "end_minute": "30"})
+    client.post("/schedule", data={"hour": "4", "minute": "30", "end_hour": "4", "end_minute": "30", "run_clean": "on"})
     schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
     assert schedule.end_hour is None
     assert schedule.end_minute is None
@@ -340,14 +341,14 @@ def test_schedule_zero_length_window_is_normalized_to_no_window(client: TestClie
 def test_schedule_incomplete_end_time_is_treated_as_no_window(client: TestClient):
     # only end_hour given, end_minute left blank — an incomplete window is
     # as good as none, not an error.
-    client.post("/schedule", data={"hour": "4", "minute": "0", "end_hour": "6"})
+    client.post("/schedule", data={"hour": "4", "minute": "0", "end_hour": "6", "run_clean": "on"})
     schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
     assert schedule.end_hour is None
     assert schedule.end_minute is None
 
 
 def test_schedule_window_spanning_midnight_saved_and_displayed_correctly(client: TestClient):
-    resp = client.post("/schedule", data={"hour": "23", "minute": "0", "end_hour": "2", "end_minute": "0"})
+    resp = client.post("/schedule", data={"hour": "23", "minute": "0", "end_hour": "2", "end_minute": "0", "run_clean": "on"})
     assert "23:00-02:00" in resp.text
 
     schedule = asyncio.run(_get_schedule(client.app.state.session_factory))

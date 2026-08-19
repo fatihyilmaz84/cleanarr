@@ -13,10 +13,16 @@ from sqlmodel import select
 from app.apply import apply_pending_change
 from app.arr_client import ArrClient
 from app.jobs import Job, JobManager
-from app.models import ChangeStatus, PendingChange
+from app.models import ChangeStatus, NormalizationChange, PendingChange
 from app.normalize_service import NormalizeScanSummary, apply_normalization_change, propose_normalizations
 from app.scanner import ScanSummary, run_scan
-from app.settings_store import ArrConfig, get_arr_config, get_media_paths, get_normalizer_config, get_rule_config
+from app.settings_store import (
+    ArrConfig,
+    get_arr_config,
+    get_media_paths,
+    resolve_normalizer_config,
+    resolve_rule_config,
+)
 
 
 def build_arr_client(arr_config: ArrConfig) -> ArrClient:
@@ -52,7 +58,13 @@ async def _apply_changes(
         job.progress_fraction = 0.0
         job.message = f"applying {job.progress_current + 1}/{job.progress_total}…"
         async with session_factory() as session:
-            rule_config = await get_rule_config(session)
+            # Re-decide with the rules that *proposed* this specific change
+            # (stamped on the row at scan time), not with whatever the
+            # global Rules happen to be now — otherwise a change proposed
+            # under one preset would be applied under another, and what
+            # gets dropped wouldn't match what was shown or approved.
+            change = await session.get(PendingChange, change_id)
+            rule_config = await resolve_rule_config(session, change.rule_preset_id if change else None)
             result = await apply_pending_change(session, change_id, rule_config, progress_cb=progress_cb)
             results.append(
                 {
@@ -73,8 +85,13 @@ def submit_scan_job(
     auto_apply: bool = False,
     apply_queued: bool = False,
     deadline: datetime | None = None,
+    rule_preset_id: str | None = None,
 ) -> str:
-    """`auto_apply`/`apply_queued`/`deadline` are only ever set by the
+    """`rule_preset_id` selects a saved RulePreset to scan with (None = the
+    Rules page's Default) — set by a schedule that has one attached; a
+    manual "Scan Now" always uses Default.
+
+    `auto_apply`/`apply_queued`/`deadline` are only ever set by the
     scheduler (see app/scheduler.py) — a manual "Scan Now" never applies
     anything unattended and never has a time limit. Two independent,
     explicit opt-ins, since they carry different amounts of risk:
@@ -95,7 +112,7 @@ def submit_scan_job(
 
     async def run(job: Job) -> None:
         async with session_factory() as session:
-            rule_config = await get_rule_config(session)
+            rule_config = await resolve_rule_config(session, rule_preset_id)
             media_paths = await get_media_paths(session)
             arr_config = await get_arr_config(session)
 
@@ -112,7 +129,13 @@ def submit_scan_job(
         arr_client = build_arr_client(arr_config)
         async with session_factory() as session:
             summary = await run_scan(
-                session, media_paths, rule_config, arr_client, progress_cb=progress_cb, deadline=deadline
+                session,
+                media_paths,
+                rule_config,
+                arr_client,
+                progress_cb=progress_cb,
+                deadline=deadline,
+                rule_preset_id=rule_preset_id,
             )
 
         job.result = asdict(summary)
@@ -168,17 +191,66 @@ def submit_apply_job(session_factory: async_sessionmaker, job_manager: JobManage
     return job_manager.submit("apply", run)
 
 
-def submit_normalize_scan_job(session_factory: async_sessionmaker, job_manager: JobManager) -> str:
+async def _apply_normalizations(
+    session_factory: async_sessionmaker, job: Job, change_ids: list[int], deadline: datetime | None = None
+) -> tuple[list[dict], bool]:
+    """Normalizer counterpart of _apply_changes. Each file's config is
+    resolved from the preset stamped on its own row, so a change proposed
+    under one NormalizerPreset is never applied under a different one.
+
+    `deadline` is checked between files. mkvpropedit rewrites container
+    metadata in place and returns near-instantly, so unlike the remux there
+    is no long window to interrupt — but a queue of several thousand files
+    still adds up, so a scheduled run honours its window here too.
+    """
+    results: list[dict] = []
+    for change_id in change_ids:
+        if deadline is not None and datetime.now(timezone.utc) >= deadline:
+            return results, True
+
+        job.message = f"applying {job.progress_current + 1}/{job.progress_total}…"
+        async with session_factory() as session:
+            change = await session.get(NormalizationChange, change_id)
+            config = await resolve_normalizer_config(session, change.normalizer_preset_id if change else None)
+            result = await apply_normalization_change(session, change_id, config)
+            results.append(
+                {
+                    "change_id": result.change_id,
+                    "success": result.success,
+                    "message": result.message,
+                    "tracks_updated": result.tracks_updated,
+                }
+            )
+        job.progress_current += 1
+    return results, False
+
+
+def submit_normalize_scan_job(
+    session_factory: async_sessionmaker,
+    job_manager: JobManager,
+    normalizer_preset_id: str | None = None,
+    auto_apply: bool = False,
+    apply_queued: bool = False,
+    deadline: datetime | None = None,
+) -> str:
     """Proposes track metadata normalizations for every already-scanned
     file (see app/normalize_service.py — this reads existing MediaFile/
     StreamRecord rows, no ffprobe re-run needed). A separate job kind from
     "scan" since it's an independent system from the rule-based remover —
     see TODO.md #7.
+
+    `normalizer_preset_id`/`auto_apply`/`apply_queued`/`deadline` mirror
+    submit_scan_job's, and like there are only ever set by the scheduler:
+    a manual "Scan for Normalization" proposes with Default and writes
+    nothing to disk. The two apply opt-ins are deliberately separate for
+    the same reason as the cleaner's — `apply_queued` runs changes a human
+    already reviewed, `auto_apply` runs this pass's own fresh findings with
+    nobody having looked at them.
     """
 
     async def run(job: Job) -> None:
         async with session_factory() as session:
-            config = await get_normalizer_config(session)
+            config = await resolve_normalizer_config(session, normalizer_preset_id)
 
         def progress_cb(summary: NormalizeScanSummary) -> None:
             job.progress_current = summary.files_considered
@@ -186,14 +258,54 @@ def submit_normalize_scan_job(session_factory: async_sessionmaker, job_manager: 
             job.message = f"normalizing… {summary.files_considered} file(s) considered"
 
         async with session_factory() as session:
-            summary = await propose_normalizations(session, config, progress_cb=progress_cb)
+            summary = await propose_normalizations(
+                session,
+                config,
+                progress_cb=progress_cb,
+                deadline=deadline,
+                normalizer_preset_id=normalizer_preset_id,
+            )
 
         job.result = {
             "files_considered": summary.files_considered,
             "files_with_changes": summary.files_with_changes,
             "errors": summary.errors,
+            "stopped_early": summary.stopped_early,
         }
         job.message = f"considered {summary.files_considered} file(s), {summary.files_with_changes} need changes"
+        if summary.stopped_early:
+            job.message += " — stopped early, hit the schedule's time window"
+
+        ids_to_apply: list[int] = []
+        if auto_apply:
+            # Scoped to what this pass itself proposed, never a fresh query
+            # for everything pending — same reasoning as submit_scan_job.
+            ids_to_apply.extend(summary.change_ids)
+        if apply_queued:
+            async with session_factory() as session:
+                queued = (
+                    await session.exec(
+                        select(NormalizationChange).where(NormalizationChange.status == ChangeStatus.approved)
+                    )
+                ).all()
+                ids_to_apply.extend(c.id for c in queued)
+
+        if not ids_to_apply:
+            return
+
+        if deadline is not None and datetime.now(timezone.utc) >= deadline:
+            job.message += f"; {len(ids_to_apply)} change(s) left for next time — time window already elapsed"
+            return
+
+        job.progress_current = 0
+        job.progress_total = len(ids_to_apply)
+        apply_results, stopped_early = await _apply_normalizations(
+            session_factory, job, ids_to_apply, deadline=deadline
+        )
+        applied = sum(1 for r in apply_results if r["success"])
+        job.result["applied"] = {"attempted": len(ids_to_apply), "succeeded": applied, "stopped_early": stopped_early}
+        suffix = " — stopped early, hit the schedule's time window" if stopped_early else ""
+        job.message += f"; applied {applied}/{len(ids_to_apply)}{suffix}"
 
     return job_manager.submit("normalize_scan", run)
 
@@ -203,24 +315,7 @@ def submit_normalize_apply_job(
 ) -> str:
     async def run(job: Job) -> None:
         job.progress_total = len(change_ids)
-        async with session_factory() as session:
-            config = await get_normalizer_config(session)
-
-        results = []
-        for change_id in change_ids:
-            job.message = f"applying {job.progress_current + 1}/{job.progress_total}…"
-            async with session_factory() as session:
-                result = await apply_normalization_change(session, change_id, config)
-                results.append(
-                    {
-                        "change_id": result.change_id,
-                        "success": result.success,
-                        "message": result.message,
-                        "tracks_updated": result.tracks_updated,
-                    }
-                )
-            job.progress_current += 1
-
+        results, _stopped_early = await _apply_normalizations(session_factory, job, change_ids)
         job.result = {"results": results}
         succeeded = sum(1 for r in results if r["success"])
         job.message = f"applied {succeeded}/{len(results)}"

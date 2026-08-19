@@ -70,7 +70,14 @@ async def run_scan(
     arr_client: ArrClient | None = None,
     progress_cb: Callable[[ScanSummary], None] | None = None,
     deadline: datetime | None = None,
+    rule_preset_id: str | None = None,
 ) -> ScanSummary:
+    """`rule_preset_id` identifies which saved RulePreset `rule_config` came
+    from (None = the Default rules) — stamped onto every PendingChange this
+    scan produces so a later apply re-decides with the same rules. It is
+    NOT used to look anything up here; the caller has already resolved it
+    into `rule_config`.
+    """
     summary = ScanSummary()
 
     arr_index: dict[str, ArrMediaInfo] = {}
@@ -103,7 +110,9 @@ async def run_scan(
 
         summary.files_seen += 1
         try:
-            await _scan_one_file(session, file_path, library_type, rule_config, arr_index, summary)
+            await _scan_one_file(
+                session, file_path, library_type, rule_config, arr_index, summary, rule_preset_id=rule_preset_id
+            )
         except AnalyzerError as e:
             summary.errors.append(f"{file_path}: {e}")
         if progress_cb:
@@ -134,6 +143,7 @@ async def _scan_one_file(
     rule_config: RuleConfig,
     arr_index: dict[str, ArrMediaInfo],
     summary: ScanSummary,
+    rule_preset_id: str | None = None,
 ) -> None:
     stat = file_path.stat()
     path_str = str(file_path)
@@ -238,6 +248,9 @@ async def _scan_one_file(
         ]
         if existing_change:
             existing_change.proposed = proposed
+            # Re-stamped, not preserved: the proposal was just recomputed
+            # under *these* rules, so that's what applying it must use.
+            existing_change.rule_preset_id = rule_preset_id
             existing_change.updated_at = _now()
             session.add(existing_change)
             await session.flush()
@@ -249,7 +262,12 @@ async def _scan_one_file(
             if existing_change.status == ChangeStatus.pending:
                 summary.pending_change_ids.append(existing_change.id)
         else:
-            new_change = PendingChange(file_id=media_file.id, status=ChangeStatus.pending, proposed=proposed)
+            new_change = PendingChange(
+                file_id=media_file.id,
+                status=ChangeStatus.pending,
+                proposed=proposed,
+                rule_preset_id=rule_preset_id,
+            )
             session.add(new_change)
             await session.flush()
             summary.pending_change_ids.append(new_change.id)

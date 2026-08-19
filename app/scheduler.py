@@ -1,7 +1,13 @@
 """Lightweight in-process scheduler: polls once every 30 seconds and fires
 any configured Schedule whose time-of-day/day-of-week matches the current
 moment (in the configured display timezone — see app/settings_store.py's
-DisplaySettings and TODO.md #4/#3), by submitting a scan job.
+DisplaySettings and TODO.md #4/#3).
+
+A schedule can run either or both of this app's two independent systems —
+the rule-based cleaner (`run_clean`) and the track metadata normalizer
+(`run_normalize`) — each with its own saved preset attached
+(`rule_preset_id` / `normalizer_preset_id`, resolved via
+app/settings_store.py) and its own pair of apply opt-ins.
 
 A schedule with an end time (e.g. 04:00-06:00) also carries a computed
 deadline through to that job — see window_deadline() and its use in
@@ -24,7 +30,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from app.actions import submit_scan_job
+from app.actions import submit_normalize_scan_job, submit_scan_job
 from app.jobs import JobManager
 from app.settings_store import Schedule, get_display_settings, get_schedules
 
@@ -128,17 +134,45 @@ class Scheduler:
             self._last_fired[schedule.id] = minute_key
             deadline = window_deadline(schedule, now)
             logger.info(
-                "schedule %s ('%s') firing, auto_apply=%s, apply_queued=%s, deadline=%s",
+                "schedule %s ('%s') firing, clean=%s (preset=%s, auto_apply=%s, apply_queued=%s), "
+                "normalize=%s (preset=%s, auto_apply=%s, apply_queued=%s), deadline=%s",
                 schedule.id,
                 schedule.label,
+                schedule.run_clean,
+                schedule.rule_preset_id,
                 schedule.auto_apply,
                 schedule.apply_queued,
+                schedule.run_normalize,
+                schedule.normalizer_preset_id,
+                schedule.normalize_auto_apply,
+                schedule.normalize_apply_queued,
                 deadline,
             )
-            submit_scan_job(
-                self._session_factory,
-                self._job_manager,
-                auto_apply=schedule.auto_apply,
-                apply_queued=schedule.apply_queued,
-                deadline=deadline,
-            )
+
+            # Both are submitted to the same single-worker job queue (see
+            # app/jobs.py), so they run one after the other, never
+            # concurrently — and they share one deadline, so a schedule
+            # with a window can't have its normalize half run past it just
+            # because the clean half used up the time.
+            if schedule.run_clean:
+                submit_scan_job(
+                    self._session_factory,
+                    self._job_manager,
+                    auto_apply=schedule.auto_apply,
+                    apply_queued=schedule.apply_queued,
+                    deadline=deadline,
+                    rule_preset_id=schedule.rule_preset_id,
+                )
+            if schedule.run_normalize:
+                # Queued after the clean job on purpose: normalization is a
+                # pure function of already-scanned stream data, so running
+                # it second means it sees whatever the scan just refreshed
+                # (and skips tracks the scan just proposed dropping).
+                submit_normalize_scan_job(
+                    self._session_factory,
+                    self._job_manager,
+                    normalizer_preset_id=schedule.normalizer_preset_id,
+                    auto_apply=schedule.normalize_auto_apply,
+                    apply_queued=schedule.normalize_apply_queued,
+                    deadline=deadline,
+                )

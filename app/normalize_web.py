@@ -15,7 +15,13 @@ from app.deps import get_session
 from app.models import ChangeStatus, NormalizationChange
 from app.normalizer import NormalizerConfig
 from app.queries import list_normalize_items, normalize_stats
-from app.settings_store import get_normalizer_config, set_normalizer_config
+from app.settings_store import (
+    NormalizerPreset,
+    get_normalizer_config,
+    get_normalizer_presets,
+    set_normalizer_config,
+    set_normalizer_presets,
+)
 from app.web import _base_context, _paginate, _redirect, _split_csv, templates
 
 normalize_router = APIRouter()
@@ -23,9 +29,43 @@ normalize_router = APIRouter()
 
 @normalize_router.get("/normalize/settings")
 async def ui_normalize_settings(request: Request, session: AsyncSession = Depends(get_session)):
+    """Same one-form-two-targets shape as app/web.py::ui_rules — no
+    `?preset=` edits the Default normalizer config, one edits that saved
+    NormalizerPreset.
+    """
     ctx = await _base_context(request, session)
-    ctx["config"] = await get_normalizer_config(session)
+    presets = await get_normalizer_presets(session)
+    preset_id = request.query_params.get("preset") or None
+    editing = next((p for p in presets if p.id == preset_id), None)
+
+    ctx["config"] = editing.config if editing else await get_normalizer_config(session)
+    ctx["presets"] = presets
+    ctx["editing_preset"] = editing
+    ctx["form_action"] = f"/normalize/settings?preset={editing.id}" if editing else "/normalize/settings"
     return templates.TemplateResponse(request, "normalize_settings.html", ctx)
+
+
+@normalize_router.post("/normalize/settings/presets")
+async def ui_add_normalizer_preset(request: Request, session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    name = form.get("name", "").strip()
+    if not name:
+        return _redirect("/normalize/settings", "Preset needs a name — not saved.")
+
+    presets = await get_normalizer_presets(session)
+    if any(p.name.lower() == name.lower() for p in presets):
+        return _redirect("/normalize/settings", f"A preset named '{name}' already exists.")
+
+    presets.append(NormalizerPreset(name=name, config=await get_normalizer_config(session)))
+    await set_normalizer_presets(session, presets)
+    return _redirect("/normalize/settings", f"Preset '{name}' created from your current settings.")
+
+
+@normalize_router.post("/normalize/settings/presets/{preset_id}/delete")
+async def ui_delete_normalizer_preset(preset_id: str, session: AsyncSession = Depends(get_session)):
+    presets = await get_normalizer_presets(session)
+    await set_normalizer_presets(session, [p for p in presets if p.id != preset_id])
+    return _redirect("/normalize/settings", "Preset deleted — anything using it falls back to Default settings.")
 
 
 @normalize_router.post("/normalize/settings")
@@ -45,6 +85,16 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
         original_title_patterns=_split_csv(form.get("original_title_patterns", "")),
         dubbed_title_patterns=_split_csv(form.get("dubbed_title_patterns", "")),
     )
+    preset_id = request.query_params.get("preset") or None
+    if preset_id:
+        presets = await get_normalizer_presets(session)
+        for preset in presets:
+            if preset.id == preset_id:
+                preset.config = config
+                await set_normalizer_presets(session, presets)
+                return _redirect(f"/normalize/settings?preset={preset_id}", f"Preset '{preset.name}' saved.")
+        return _redirect("/normalize/settings", "That preset no longer exists — nothing saved.")
+
     await set_normalizer_config(session, config)
     return _redirect("/normalize/settings", "Normalizer settings saved.")
 

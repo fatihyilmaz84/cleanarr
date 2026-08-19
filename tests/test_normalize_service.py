@@ -160,6 +160,85 @@ async def test_propose_normalizations_includes_track_overridden_back_to_keep(ses
         assert {p["index"] for p in change.proposed} == {0}
 
 
+@pytest.mark.asyncio
+async def test_propose_normalizations_updates_an_approved_change_instead_of_duplicating(session_factory, tmp_path):
+    """A NormalizationChange already queued (approved) must be updated in
+    place on a re-propose, never left alone while a second row is created
+    for the same file — the duplicate-queue-entry bug that was fixed in
+    app/scanner.py had the same shape here.
+    """
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
+    )
+
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+        change = (await session.exec(select(NormalizationChange))).one()
+        change.status = ChangeStatus.approved
+        session.add(change)
+        await session.commit()
+        change_id = change.id
+
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+
+    async with session_factory() as session:
+        all_changes = (await session.exec(select(NormalizationChange))).all()
+        assert len(all_changes) == 1
+        assert all_changes[0].id == change_id
+        assert all_changes[0].status == ChangeStatus.approved  # still queued
+
+
+@pytest.mark.asyncio
+async def test_propose_normalizations_stops_at_the_deadline_between_files(session_factory, tmp_path):
+    from datetime import datetime, timedelta, timezone
+
+    for i in range(3):
+        (tmp_path / f"Movie{i}.mkv").write_bytes(b"x")
+        await _seed_file(
+            session_factory,
+            str(tmp_path / f"Movie{i}.mkv"),
+            [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
+        )
+
+    already_past = datetime.now(timezone.utc) - timedelta(seconds=1)
+    async with session_factory() as session:
+        summary = await propose_normalizations(session, NormalizerConfig(), deadline=already_past)
+
+    assert summary.stopped_early is True
+    assert summary.files_considered == 0  # checked before the first file, nothing started
+
+    # A generous deadline lets the whole pass finish normally.
+    async with session_factory() as session:
+        summary = await propose_normalizations(
+            session, NormalizerConfig(), deadline=datetime.now(timezone.utc) + timedelta(hours=1)
+        )
+    assert summary.stopped_early is False
+    assert summary.files_considered == 3
+
+
+@pytest.mark.asyncio
+async def test_propose_normalizations_stamps_and_reports_its_preset_and_change_ids(session_factory, tmp_path):
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
+    )
+
+    async with session_factory() as session:
+        summary = await propose_normalizations(session, NormalizerConfig(), normalizer_preset_id="preset-abc")
+
+    async with session_factory() as session:
+        change = (await session.exec(select(NormalizationChange))).one()
+        assert change.normalizer_preset_id == "preset-abc"
+        # change_ids scopes a scheduled auto-apply to this pass's own output.
+        assert summary.change_ids == [change.id]
+
+
 def _fake_mkvpropedit(calls):
     def run(cmd, capture_output, text, timeout):
         calls.append(cmd)

@@ -3,7 +3,25 @@
 {% block page_title %}Rules{% endblock %}
 {% block content %}
 <div class="glass-panel rounded-lg p-6 max-w-2xl">
-  <form method="post" action="/rules" class="space-y-6">
+  <div class="flex items-center justify-between mb-4 border-b border-white/10 pb-3">
+    <div>
+      <h3 class="font-label-caps text-label-caps text-on-surface-variant">Editing</h3>
+      <p class="font-body-lg text-body-lg text-on-surface mt-0.5">
+        {% if editing_preset %}Preset: {{ editing_preset.name }}{% else %}Default rules{% endif %}
+      </p>
+    </div>
+    {% if editing_preset %}
+    <a href="/rules" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Back to Default</a>
+    {% endif %}
+  </div>
+  <p class="font-body-md text-[13px] text-on-surface-variant mb-4">
+    {% if editing_preset %}
+    These rules apply only to schedules with the "{{ editing_preset.name }}" preset attached — see <a href="/schedule" class="text-primary">Schedule</a>. Manual "Scan Now" always uses Default.
+    {% else %}
+    Used by manual "Scan Now" and by any schedule with no preset attached. Save named variations as presets below to attach different rules to different schedules.
+    {% endif %}
+  </p>
+  <form method="post" action="{{ form_action }}" class="space-y-6">
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Audio languages to keep</label>
       <select name="audio_keep_languages" multiple size="8" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
@@ -70,6 +88,32 @@
     <span class="material-symbols-outlined text-tertiary">translate</span>
     <p class="font-body-md text-body-md text-on-surface-variant">"Original-language" protection needs a Sonarr/Radarr connection under <a href="/settings" class="text-primary">Settings</a> — that's how Cleanarr knows a given file is, say, a Korean movie, so it can keep the Korean track even when your keep-list above only lists <span class="font-code-md">eng</span>. Without that connection this checkbox has nothing to go on and does nothing.</p>
   </div>
+</div>
+<div class="glass-panel rounded-lg p-6 max-w-2xl">
+  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-1 border-b border-white/10 pb-2">Rule presets</h3>
+  <p class="font-body-md text-[13px] text-on-surface-variant mt-3 mb-4">Named rule sets you can attach to a schedule — e.g. a gentle nightly clean and an aggressive weekly one. A new preset starts as a copy of your current Default rules; edit it from here to make it differ.</p>
+  {% if presets %}
+  <div class="space-y-2 mb-4">
+    {% for preset in presets %}
+    <div class="flex items-center justify-between gap-3 tech-border rounded-DEFAULT px-3 py-2">
+      <span class="font-body-md text-body-md text-on-surface">{{ preset.name }}</span>
+      <div class="flex gap-2 flex-shrink-0">
+        <a href="/rules?preset={{ preset.id }}" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">Edit</a>
+        <form method="post" action="/rules/presets/{{ preset.id }}/delete">
+          <button class="font-label-caps text-label-caps border border-white/10 text-tertiary px-3 py-1.5 rounded-DEFAULT hover:bg-tertiary/10 transition-colors">Delete</button>
+        </form>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <form method="post" action="/rules/presets" class="flex flex-wrap items-end gap-3">
+    <div class="flex-1 min-w-[200px]">
+      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">New preset name</label>
+      <input name="name" placeholder="e.g. Aggressive weekly" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+    </div>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Create Preset</button>
+  </form>
 </div>
 {% if not rules.audio_keep_languages and not rules.subtitle_keep_languages %}
 <div class="glass-panel rounded-lg p-5 border-l-2 border-l-tertiary max-w-2xl">

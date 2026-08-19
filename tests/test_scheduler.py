@@ -129,6 +129,59 @@ async def test_tick_ignores_non_matching_time(session_factory):
 
 
 @pytest.mark.asyncio
+async def test_tick_fires_only_the_clean_job_by_default(session_factory):
+    """run_clean defaults True / run_normalize defaults False, so a schedule
+    saved before those fields existed keeps doing exactly what it did.
+    """
+    async with session_factory() as session:
+        await set_schedules(session, [_schedule(hour=4, minute=0)])
+
+    job_manager = JobManager()
+    scheduler = Scheduler(session_factory, job_manager)
+    await scheduler.tick(now=datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC")))
+
+    assert [j.kind for j in job_manager.list_recent()] == ["scan"]
+
+
+@pytest.mark.asyncio
+async def test_tick_fires_both_jobs_when_the_schedule_runs_both(session_factory):
+    async with session_factory() as session:
+        await set_schedules(session, [_schedule(hour=4, minute=0, run_clean=True, run_normalize=True)])
+
+    job_manager = JobManager()
+    scheduler = Scheduler(session_factory, job_manager)
+    await scheduler.tick(now=datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC")))
+
+    # list_recent is newest-first; normalize is submitted after clean so it
+    # queues behind it on the single worker and sees the fresh scan data.
+    assert [j.kind for j in job_manager.list_recent()] == ["normalize_scan", "scan"]
+
+
+@pytest.mark.asyncio
+async def test_tick_fires_only_normalize_for_a_normalize_only_schedule(session_factory):
+    async with session_factory() as session:
+        await set_schedules(session, [_schedule(hour=4, minute=0, run_clean=False, run_normalize=True)])
+
+    job_manager = JobManager()
+    scheduler = Scheduler(session_factory, job_manager)
+    await scheduler.tick(now=datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC")))
+
+    assert [j.kind for j in job_manager.list_recent()] == ["normalize_scan"]
+
+
+@pytest.mark.asyncio
+async def test_tick_fires_nothing_when_a_schedule_runs_neither(session_factory):
+    async with session_factory() as session:
+        await set_schedules(session, [_schedule(hour=4, minute=0, run_clean=False, run_normalize=False)])
+
+    job_manager = JobManager()
+    scheduler = Scheduler(session_factory, job_manager)
+    await scheduler.tick(now=datetime(2026, 1, 1, 4, 0, tzinfo=ZoneInfo("UTC")))
+
+    assert job_manager.list_recent() == []
+
+
+@pytest.mark.asyncio
 async def test_tick_uses_configured_display_timezone(session_factory):
     # 04:00 Europe/Berlin (UTC+1 in January) is 03:00 UTC.
     async with session_factory() as session:

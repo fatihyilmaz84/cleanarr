@@ -116,6 +116,62 @@ batch and a schedule like "04:00-06:00"? — addressed:
   expected, not a bug. Zero-length/incomplete end-time input from the form
   is normalized to "no window" rather than erroring.
 
+### 3b. Attach rules to a schedule, for cleaning *and* normalizing — done ✅
+
+Two gaps this closed: a schedule could only ever run the rule-based
+cleaner (the normalizer's whole pipeline was unreachable from a schedule),
+and rules were a single global singleton with no way to vary them per
+schedule.
+
+- [x] `RulePreset` / `NormalizerPreset` (`app/settings_store.py`): named,
+      saved configs stored under their own settings keys. The Rules /
+      Normalize Settings pages' own configs stay the unnamed **Default**,
+      used by manual Scan Now and by any schedule with no preset attached —
+      so this is purely additive and nothing needed migrating.
+- [x] Preset CRUD reuses the existing edit form via one-form-two-targets:
+      `/rules` edits Default, `/rules?preset=<id>` edits that preset. Same
+      shape for `/normalize/settings`. A new preset is seeded from Default
+      rather than from empty, so it can never start life as an inert
+      "keep nothing" config that a schedule quietly attaches to.
+- [x] `Schedule` gained `run_clean` / `run_normalize` (what to run) plus
+      `rule_preset_id` / `normalizer_preset_id` (what to run it with), and
+      a second pair of apply opt-ins for the normalizer
+      (`normalize_auto_apply` / `normalize_apply_queued`) rather than
+      reusing the cleaner's — they're independent systems with different
+      risk profiles. Defaults (`run_clean=True`, `run_normalize=False`)
+      mean an existing schedule keeps doing exactly what it did.
+- [x] **The correctness property this rests on:** `app/apply.py` and
+      `app/normalize_service.py` both deliberately re-decide from scratch
+      at apply time rather than trusting the cached `proposed`. So the
+      config used at apply time *must* be the one that proposed the
+      change — otherwise what gets dropped wouldn't match what the user
+      was shown and approved. Solved by stamping
+      `PendingChange.rule_preset_id` / `NormalizationChange.
+      normalizer_preset_id` at propose time and resolving per-row at apply
+      time. Covered by a test that was verified to fail (stripping the
+      wrong audio track) when the resolution is removed.
+- [x] Deleting a preset is never destructive: `resolve_rule_config` /
+      `resolve_normalizer_config` fall back to Default for an unknown id,
+      so a stale reference can't wedge a scheduled run or block an
+      already-queued change. The Schedule list renders such a reference as
+      "deleted preset → Default" rather than a stale name or a bare id.
+- [x] The normalizer gained the deadline support the cleaner already had
+      (`propose_normalizations(deadline=...)` plus a between-files check in
+      the normalize apply loop), so a windowed schedule bounds both halves.
+      It also gained `NormalizeScanSummary.change_ids` so a scheduled
+      normalize auto-apply is scoped to that pass's own findings, mirroring
+      `ScanSummary.pending_change_ids`.
+- [x] Fixed in passing: `propose_normalizations` only matched
+      `status=pending` when looking for an existing change, so re-proposing
+      over an already-queued (approved) file created a **duplicate** row —
+      the same bug previously fixed in `app/scanner.py`.
+- Both jobs go on the same single-worker queue, so a schedule running both
+  runs them sequentially, never concurrently; normalize is submitted second
+  on purpose, so it sees whatever the scan just refreshed and skips tracks
+  the scan just proposed dropping.
+- Still open: editing an existing schedule (today: delete + re-add), and
+  per-schedule media-path scoping ("clean only /movies on Sundays").
+
 ## 4. Fix timezone handling — done ✅
 
 Confirmed root cause: the Docker container has no `TZ` set (defaults to
