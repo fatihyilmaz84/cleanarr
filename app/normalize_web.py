@@ -16,7 +16,7 @@ from app.models import ChangeStatus, NormalizationChange
 from app.normalizer import NormalizerConfig
 from app.queries import list_normalize_items, normalize_stats
 from app.settings_store import get_normalizer_config, set_normalizer_config
-from app.web import _base_context, _redirect, _split_csv, templates
+from app.web import _base_context, _paginate, _redirect, _split_csv, templates
 
 normalize_router = APIRouter()
 
@@ -52,7 +52,11 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
 @normalize_router.get("/normalize")
 async def ui_normalize(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["items"] = await list_normalize_items(session, ChangeStatus.pending)
+    all_items = await list_normalize_items(session, ChangeStatus.pending)
+    page_items, pagination = _paginate(all_items, request)
+    ctx["items"] = page_items
+    ctx["total_count"] = len(all_items)
+    ctx["pagination"] = pagination
     return templates.TemplateResponse(request, "normalize.html", ctx)
 
 
@@ -94,7 +98,11 @@ async def ui_normalize_skip(change_id: int, session: AsyncSession = Depends(get_
 @normalize_router.get("/normalize/queue")
 async def ui_normalize_queue(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["items"] = await list_normalize_items(session, ChangeStatus.approved)
+    all_items = await list_normalize_items(session, ChangeStatus.approved)
+    page_items, pagination = _paginate(all_items, request)
+    ctx["items"] = page_items
+    ctx["total_count"] = len(all_items)
+    ctx["pagination"] = pagination
     return templates.TemplateResponse(request, "normalize_queue.html", ctx)
 
 

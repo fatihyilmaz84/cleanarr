@@ -6,6 +6,39 @@ from app.models import ChangeStatus, LibraryType, MediaFile, PendingChange, Stre
 
 
 @pytest.mark.asyncio
+async def test_init_db_adds_missing_status_indices_to_an_existing_db(tmp_path):
+    """PendingChange.status/NormalizationChange.status gained `index=True`
+    after those tables already existed on deployed installs — create_all()
+    only creates missing *tables*, never adds an index to one that's already
+    there, so init_db() needs its own explicit CREATE INDEX step (mirroring
+    _add_missing_columns for the same reason). Simulate an "old" DB missing
+    the index and check init_db() adds it without erroring.
+    """
+    engine = make_engine(tmp_path / "old.db")
+    async with engine.begin() as conn:
+        await conn.exec_driver_sql(
+            "CREATE TABLE pending_changes (id INTEGER PRIMARY KEY, file_id INTEGER, status VARCHAR)"
+        )
+        await conn.exec_driver_sql(
+            "CREATE TABLE normalization_changes (id INTEGER PRIMARY KEY, file_id INTEGER, status VARCHAR)"
+        )
+
+    await init_db(engine)
+
+    async with engine.begin() as conn:
+        result = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='pending_changes'"
+        )
+        assert "ix_pending_changes_status" in {row[0] for row in result.fetchall()}
+        result = await conn.exec_driver_sql(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='normalization_changes'"
+        )
+        assert "ix_normalization_changes_status" in {row[0] for row in result.fetchall()}
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
 async def test_init_db_and_roundtrip(tmp_path):
     engine = make_engine(tmp_path / "test.db")
     await init_db(engine)

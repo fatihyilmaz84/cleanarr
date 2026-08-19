@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.actions import submit_apply_job, submit_scan_job
@@ -18,7 +19,7 @@ from app.db import init_db, make_engine, make_session_factory
 from app.deps import get_session
 from app.jobs import JobManager
 from app.models import ChangeStatus, PendingChange
-from app.queries import list_history_items, list_review_items, overview_stats
+from app.queries import list_history_items, list_review_items, normalize_stats, overview_stats
 from app.rules import RuleConfig
 from app.scheduler import Scheduler
 from app.settings_store import (
@@ -173,6 +174,36 @@ async def overview(session: AsyncSession = Depends(get_session)):
     return await overview_stats(session)
 
 
+@router.get("/api/status")
+async def status(request: Request, session: AsyncSession = Depends(get_session)):
+    """Lightweight polling target for the topbar's live job indicator and
+    nav badges (see app/templates/base.html) — deliberately smaller than
+    /api/jobs (no per-job result blobs, no job history) so polling it every
+    couple seconds while a job runs is cheap.
+    """
+    job_manager: JobManager = request.app.state.job_manager
+    job = job_manager.current()
+    stats = await overview_stats(session)
+    norm_stats = await normalize_stats(session)
+    return {
+        "job": None
+        if job is None
+        else {
+            "id": job.id,
+            "kind": job.kind,
+            "state": job.state.value,
+            "message": job.message,
+            "progress_current": job.progress_current,
+            "progress_total": job.progress_total,
+            "progress_fraction": job.progress_fraction,
+        },
+        "pending_review_count": stats["pending_review_count"],
+        "queued_count": stats["queued_count"],
+        "normalize_pending_count": norm_stats["pending_count"],
+        "normalize_queued_count": norm_stats["queued_count"],
+    }
+
+
 def _make_lifespan(db_path: Path | None):
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -197,6 +228,7 @@ def create_app(db_path: Path | None = None) -> FastAPI:
     from app.web import web_router  # local import: avoids a circular import with app.actions
 
     app = FastAPI(title="Cleanarr", lifespan=_make_lifespan(db_path))
+    app.add_middleware(GZipMiddleware, minimum_size=500)
     app.include_router(router)
     app.include_router(web_router)
     app.include_router(normalize_router)

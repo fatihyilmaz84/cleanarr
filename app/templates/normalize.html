@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as layout %}
 {% block title %}Normalize — Cleanarr{% endblock %}
 {% block page_title %}Normalize{% endblock %}
 {% block content %}
@@ -46,6 +47,7 @@
   </div>
   {% endfor %}
 </div>
+{{ layout.pagination_controls(pagination) }}
 {% else %}
 <div class="glass-panel rounded-lg p-8 text-center">
   <p class="font-body-lg text-body-lg text-on-surface-variant">Nothing to normalize.</p>

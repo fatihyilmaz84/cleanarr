@@ -1,12 +1,16 @@
 {% extends "base.html" %}
+{% import "_macros.html" as layout %}
 {% block title %}Normalize Queue — Cleanarr{% endblock %}
 {% block page_title %}Normalize Queue{% endblock %}
 {% block content %}
-{% if items %}
+{% if total_count %}
 <div class="glass-panel rounded-lg p-4 flex items-center justify-between">
-  <span class="font-body-md text-body-md text-on-surface-variant">{{ items|length }} file(s) queued, nothing written yet.</span>
+  <span class="font-body-md text-body-md text-on-surface-variant">
+    {{ total_count }} file(s) queued, nothing written yet.
+    {% if pagination.total_pages > 1 %}Showing {{ items|length }} on this page.{% endif %}
+  </span>
   <form method="post" action="/normalize/queue/run">
-    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Run Normalize Queue ({{ items|length }})</button>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Run Normalize Queue ({{ total_count }})</button>
   </form>
 </div>
 <div class="space-y-4">
@@ -30,6 +34,7 @@
   </div>
   {% endfor %}
 </div>
+{{ layout.pagination_controls(pagination) }}
 {% else %}
 <div class="glass-panel rounded-lg p-8 text-center">
   <p class="font-body-lg text-body-lg text-on-surface-variant">Nothing queued.</p>

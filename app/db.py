@@ -42,6 +42,8 @@ async def init_db(engine: AsyncEngine) -> None:
         await conn.run_sync(SQLModel.metadata.create_all)
         await _add_missing_columns(conn, "media_files", {"original_language": "VARCHAR"})
         await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON"})
+        await _add_missing_index(conn, "ix_pending_changes_status", "pending_changes", "status")
+        await _add_missing_index(conn, "ix_normalization_changes_status", "normalization_changes", "status")
 
 
 async def _add_missing_columns(conn, table: str, columns: dict[str, str]) -> None:
@@ -54,6 +56,14 @@ async def _add_missing_columns(conn, table: str, columns: dict[str, str]) -> Non
     for name, sql_type in columns.items():
         if name not in existing:
             await conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+
+
+async def _add_missing_index(conn, index_name: str, table: str, column: str) -> None:
+    """Same reasoning as _add_missing_columns — create_all() skips a table
+    entirely once it exists, so it never adds an index to a model field
+    that gained `index=True` after the table was already on disk.
+    """
+    await conn.exec_driver_sql(f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})")
 
 
 def make_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

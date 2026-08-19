@@ -86,6 +86,43 @@ def test_health(client: TestClient):
     assert client.get("/api/health").json() == {"status": "ok"}
 
 
+def test_status_reports_no_job_and_zero_badges_when_idle(client: TestClient):
+    status = client.get("/api/status").json()
+    assert status["job"] is None
+    assert status["pending_review_count"] == 0
+    assert status["queued_count"] == 0
+    assert status["normalize_pending_count"] == 0
+    assert status["normalize_queued_count"] == 0
+
+
+def test_status_reports_pending_count_and_job_progress(client: TestClient, media_dir: Path):
+    scan_job_id = client.post("/api/scan").json()["job_id"]
+    _wait_for_job(client, scan_job_id)
+
+    status = client.get("/api/status").json()
+    assert status["job"] is None  # the scan already finished
+    assert status["pending_review_count"] == 1
+
+
+def test_status_surfaces_a_running_job(client: TestClient):
+    from app.jobs import Job, JobState
+
+    job_manager = client.app.state.job_manager
+    job = Job(id="fake-job", kind="apply", state=JobState.running, progress_current=3, progress_total=10)
+    job_manager._jobs[job.id] = job
+
+    status = client.get("/api/status").json()
+    assert status["job"] == {
+        "id": "fake-job",
+        "kind": "apply",
+        "state": "running",
+        "message": "",
+        "progress_current": 3,
+        "progress_total": 10,
+        "progress_fraction": 0.0,
+    }
+
+
 def test_settings_roundtrip(client: TestClient):
     settings = client.get("/api/settings").json()
     assert settings["rules"]["audio_keep_languages"] == ["eng"]

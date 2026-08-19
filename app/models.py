@@ -69,7 +69,9 @@ class PendingChange(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     file_id: int = Field(foreign_key="media_files.id", index=True)
-    status: ChangeStatus = ChangeStatus.pending
+    # Indexed — every review/queue/overview page filters on status, and it's
+    # by far the most frequently queried column in the app.
+    status: ChangeStatus = Field(default=ChangeStatus.pending, index=True)
     # Serialized list of {index, type, codec, language, title, keep, reason}
     proposed: list = Field(default_factory=list, sa_column=Column(JSON))
     # Stream indices the user force-kept at approval time despite the rule
@@ -96,7 +98,7 @@ class NormalizationChange(SQLModel, table=True):
 
     id: int | None = Field(default=None, primary_key=True)
     file_id: int = Field(foreign_key="media_files.id", index=True)
-    status: ChangeStatus = ChangeStatus.pending
+    status: ChangeStatus = Field(default=ChangeStatus.pending, index=True)
     # Serialized list of {index, codec_type, track_selector, old_title,
     # new_title, old_language, new_language, old_default, new_default,
     # changed, reason} — see app/normalizer.py::TrackNormalization.

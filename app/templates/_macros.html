@@ -1,0 +1,20 @@
+{# Macro-only template — nothing here renders on its own, only imported.
+   Kept separate from base.html so importing it doesn't drag along base's
+   full page body (nav, topbar, badges) or require its request context. #}
+{% macro pagination_controls(pagination) %}
+{% if pagination and pagination.total_pages > 1 %}
+<div class="flex items-center justify-center gap-4 py-2">
+  {% if pagination.prev_url %}
+  <a href="{{ pagination.prev_url }}" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">&larr; Prev</a>
+  {% else %}
+  <span class="font-label-caps text-label-caps text-on-surface-variant/40 px-3 py-1.5 rounded-DEFAULT border border-white/5">&larr; Prev</span>
+  {% endif %}
+  <span class="font-label-caps text-label-caps text-on-surface-variant">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+  {% if pagination.next_url %}
+  <a href="{{ pagination.next_url }}" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Next &rarr;</a>
+  {% else %}
+  <span class="font-label-caps text-label-caps text-on-surface-variant/40 px-3 py-1.5 rounded-DEFAULT border border-white/5">Next &rarr;</span>
+  {% endif %}
+</div>
+{% endif %}
+{% endmacro %}

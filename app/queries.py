@@ -5,14 +5,13 @@ UI, so the two can't drift out of sync on what a "pending change" or
 
 from __future__ import annotations
 
-from sqlmodel import select
+from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import ChangeStatus, HistoryEntry, MediaFile, NormalizationChange, PendingChange
 
 
-async def review_item(session: AsyncSession, change: PendingChange) -> dict:
-    mf = await session.get(MediaFile, change.file_id)
+def _effective_review(change: PendingChange, mf: MediaFile | None) -> dict:
     # Overrides (see app/rules.py::apply_overrides) force-keep specific
     # stream indices at apply time — reflect that here so "kept"/"dropped"
     # always shows the *actual* plan, not just the raw rule proposal. For a
@@ -36,15 +35,32 @@ async def review_item(session: AsyncSession, change: PendingChange) -> dict:
     }
 
 
+async def review_item(session: AsyncSession, change: PendingChange) -> dict:
+    mf = await session.get(MediaFile, change.file_id)
+    return _effective_review(change, mf)
+
+
+async def _media_files_by_id(session: AsyncSession, file_ids: list[int]) -> dict[int, MediaFile]:
+    # Batch-fetch once instead of a session.get() per row — the N+1 pattern
+    # this replaced meant one extra round trip per item on every review/
+    # history/normalize listing.
+    if not file_ids:
+        return {}
+    rows = (await session.exec(select(MediaFile).where(MediaFile.id.in_(set(file_ids))))).all()
+    return {mf.id: mf for mf in rows}
+
+
 async def list_review_items(session: AsyncSession, status: ChangeStatus) -> list[dict]:
-    result = await session.exec(
-        select(PendingChange).where(PendingChange.status == status).order_by(PendingChange.created_at.desc())
-    )
-    return [await review_item(session, c) for c in result.all()]
+    changes = (
+        await session.exec(
+            select(PendingChange).where(PendingChange.status == status).order_by(PendingChange.created_at.desc())
+        )
+    ).all()
+    files_by_id = await _media_files_by_id(session, [c.file_id for c in changes])
+    return [_effective_review(c, files_by_id.get(c.file_id)) for c in changes]
 
 
-async def history_item(session: AsyncSession, entry: HistoryEntry) -> dict:
-    mf = await session.get(MediaFile, entry.file_id)
+def _history_dict(entry: HistoryEntry, mf: MediaFile | None) -> dict:
     return {
         "id": entry.id,
         "file_id": entry.file_id,
@@ -58,28 +74,48 @@ async def history_item(session: AsyncSession, entry: HistoryEntry) -> dict:
     }
 
 
+async def history_item(session: AsyncSession, entry: HistoryEntry) -> dict:
+    mf = await session.get(MediaFile, entry.file_id)
+    return _history_dict(entry, mf)
+
+
 async def list_history_items(session: AsyncSession, limit: int = 50) -> list[dict]:
-    result = await session.exec(select(HistoryEntry).order_by(HistoryEntry.applied_at.desc()).limit(limit))
-    return [await history_item(session, h) for h in result.all()]
+    entries = (await session.exec(select(HistoryEntry).order_by(HistoryEntry.applied_at.desc()).limit(limit))).all()
+    files_by_id = await _media_files_by_id(session, [h.file_id for h in entries])
+    return [_history_dict(h, files_by_id.get(h.file_id)) for h in entries]
 
 
 async def overview_stats(session: AsyncSession) -> dict:
-    pending = (await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.pending))).all()
-    queued = (await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.approved))).all()
-    all_files = (await session.exec(select(MediaFile))).all()
-    all_history = (await session.exec(select(HistoryEntry))).all()
+    # Aggregated in SQL rather than fetching every row into Python just to
+    # len()/sum() it — this runs on every page load (see
+    # app/web.py::_base_context), so a full-table fetch-and-deserialize here
+    # was paid on every single request regardless of the page.
+    pending_count = (
+        await session.exec(
+            select(func.count()).select_from(PendingChange).where(PendingChange.status == ChangeStatus.pending)
+        )
+    ).one()
+    queued_count = (
+        await session.exec(
+            select(func.count()).select_from(PendingChange).where(PendingChange.status == ChangeStatus.approved)
+        )
+    ).one()
+    total_files = (await session.exec(select(func.count()).select_from(MediaFile))).one()
+    total_applied_count = (await session.exec(select(func.count()).select_from(HistoryEntry))).one()
+    total_bytes_reclaimed = (
+        await session.exec(select(func.coalesce(func.sum(HistoryEntry.bytes_before - HistoryEntry.bytes_after), 0)))
+    ).one()
 
     return {
-        "total_files": len(all_files),
-        "pending_review_count": len(pending),
-        "queued_count": len(queued),
-        "total_bytes_reclaimed": sum(h.bytes_before - h.bytes_after for h in all_history),
-        "total_applied_count": len(all_history),
+        "total_files": total_files,
+        "pending_review_count": pending_count,
+        "queued_count": queued_count,
+        "total_bytes_reclaimed": total_bytes_reclaimed,
+        "total_applied_count": total_applied_count,
     }
 
 
-async def normalize_item(session: AsyncSession, change: NormalizationChange) -> dict:
-    mf = await session.get(MediaFile, change.file_id)
+def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> dict:
     overrides = set(change.overrides or [])
     effective = [
         {**p, "changed": False} if p["index"] in overrides and p["changed"] else p for p in change.proposed
@@ -99,20 +135,36 @@ async def normalize_item(session: AsyncSession, change: NormalizationChange) -> 
     }
 
 
+async def normalize_item(session: AsyncSession, change: NormalizationChange) -> dict:
+    mf = await session.get(MediaFile, change.file_id)
+    return _effective_normalize(change, mf)
+
+
 async def list_normalize_items(session: AsyncSession, status: ChangeStatus) -> list[dict]:
-    result = await session.exec(
-        select(NormalizationChange)
-        .where(NormalizationChange.status == status)
-        .order_by(NormalizationChange.created_at.desc())
-    )
-    return [await normalize_item(session, c) for c in result.all()]
+    changes = (
+        await session.exec(
+            select(NormalizationChange)
+            .where(NormalizationChange.status == status)
+            .order_by(NormalizationChange.created_at.desc())
+        )
+    ).all()
+    files_by_id = await _media_files_by_id(session, [c.file_id for c in changes])
+    return [_effective_normalize(c, files_by_id.get(c.file_id)) for c in changes]
 
 
 async def normalize_stats(session: AsyncSession) -> dict:
-    pending = (
-        await session.exec(select(NormalizationChange).where(NormalizationChange.status == ChangeStatus.pending))
-    ).all()
-    queued = (
-        await session.exec(select(NormalizationChange).where(NormalizationChange.status == ChangeStatus.approved))
-    ).all()
-    return {"pending_count": len(pending), "queued_count": len(queued)}
+    pending_count = (
+        await session.exec(
+            select(func.count())
+            .select_from(NormalizationChange)
+            .where(NormalizationChange.status == ChangeStatus.pending)
+        )
+    ).one()
+    queued_count = (
+        await session.exec(
+            select(func.count())
+            .select_from(NormalizationChange)
+            .where(NormalizationChange.status == ChangeStatus.approved)
+        )
+    ).one()
+    return {"pending_count": pending_count, "queued_count": queued_count}

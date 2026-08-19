@@ -139,6 +139,16 @@ def test_topbar_shows_progress_bar_for_running_job(client: TestClient):
     page = client.get("/").text
     assert "3/10" in page
     assert "width: 30.0%" in page
+    # Live progress is JS-polled (fetch('/api/status')) instead of a full
+    # page teardown/rebuild every 2s — see app/templates/base.html.
+    assert "<meta http-equiv=\"refresh\"" not in page
+    assert "fetch(\"/api/status\")" in page
+
+
+def test_topbar_has_no_polling_script_when_idle(client: TestClient):
+    page = client.get("/").text
+    assert "fetch(\"/api/status\")" not in page
+    assert "<meta http-equiv=\"refresh\"" not in page
 
 
 def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):

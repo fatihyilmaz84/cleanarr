@@ -50,6 +50,13 @@ class Job:
 
 RunFn = Callable[[Job], Awaitable[None]]
 
+# Finished jobs beyond this count are pruned (oldest first) after each job
+# completes — otherwise, on a long-lived container with nightly scheduled
+# scans, _jobs grows without bound for the process's entire uptime, and
+# list_recent()'s full sort over every job ever run gets slower every day.
+# Queued/running jobs are never pruned, only ones already done/error.
+MAX_FINISHED_JOBS = 200
+
 
 class JobManager:
     def __init__(self) -> None:
@@ -82,6 +89,23 @@ class JobManager:
     def list_recent(self, limit: int = 20) -> list[Job]:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)[:limit]
 
+    def current(self) -> Job | None:
+        """The most recently created queued/running job, if any — the single
+        thing the UI needs to know to show a live progress indicator. Cheaper
+        than list_recent() for callers (like every page load) that only need
+        this, not the last 20 jobs' full detail.
+        """
+        candidates = [j for j in self._jobs.values() if j.state in (JobState.queued, JobState.running)]
+        return max(candidates, key=lambda j: j.created_at, default=None)
+
+    def _prune_finished(self) -> None:
+        finished = [j for j in self._jobs.values() if j.state in (JobState.done, JobState.error)]
+        if len(finished) <= MAX_FINISHED_JOBS:
+            return
+        finished.sort(key=lambda j: j.created_at, reverse=True)
+        for stale in finished[MAX_FINISHED_JOBS:]:
+            del self._jobs[stale.id]
+
     async def _worker_loop(self) -> None:
         while True:
             job_id, run = await self._queue.get()
@@ -96,4 +120,5 @@ class JobManager:
                 job.message = str(e)
             finally:
                 job.finished_at = datetime.now(timezone.utc)
+                self._prune_finished()
                 self._queue.task_done()

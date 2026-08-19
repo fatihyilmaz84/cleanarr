@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as layout %}
 {% block title %}Review — Cleanarr{% endblock %}
 {% block page_title %}Review{% endblock %}
 {% block content %}
@@ -38,7 +39,7 @@
   {% if filters.q or filters.library_type or filters.language or filters.drop_type %}
   <a href="/review" class="font-label-caps text-label-caps text-on-surface-variant px-4 py-2 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Clear</a>
   {% endif %}
-  <span id="review-count" class="font-label-caps text-label-caps text-on-surface-variant ml-auto">{{ items|length }} of {{ total_count }}</span>
+  <span id="review-count" class="font-label-caps text-label-caps text-on-surface-variant ml-auto">{{ filtered_count }} of {{ total_count }}{% if pagination.total_pages > 1 %} (showing {{ items|length }}){% endif %}</span>
 </form>
 {% endif %}
 {% if items %}
@@ -87,6 +88,7 @@
   </div>
   {% endfor %}
 </div>
+{{ layout.pagination_controls(pagination) }}
 {% elif total_count %}
 <div class="glass-panel rounded-lg p-8 text-center">
   <p class="font-body-lg text-body-lg text-on-surface-variant">No items match these filters.</p>
@@ -146,9 +148,12 @@
     var counter = document.getElementById("review-count");
     if (!counter) return;
     var remaining = document.querySelectorAll("[data-review-card]").length;
-    var parts = counter.textContent.split(" of ");
-    var total = Math.max(0, parseInt(parts[1] || parts[0], 10) - 1);
-    counter.textContent = remaining + " of " + total;
+    var match = counter.textContent.match(/^(\d+) of (\d+)/);
+    if (!match) return;
+    var total = Math.max(0, parseInt(match[2], 10) - 1);
+    // Only replace the leading "X of Y" — leaves a "(showing N)" pagination
+    // suffix, if present, untouched.
+    counter.textContent = counter.textContent.replace(/^\d+ of \d+/, remaining + " of " + total);
   }
 })();
 </script>

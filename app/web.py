@@ -9,7 +9,7 @@ client-side JS.
 from __future__ import annotations
 
 from datetime import datetime, time, timedelta
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from fastapi import APIRouter, Depends, Request
@@ -64,17 +64,17 @@ templates.env.filters["localtime"] = _localtime
 
 
 def _current_job(job_manager: JobManager) -> dict | None:
-    for job in job_manager.list_recent():
-        if job.state in ("queued", "running"):
-            return {
-                "kind": job.kind,
-                "state": job.state.value,
-                "progress_current": job.progress_current,
-                "progress_total": job.progress_total,
-                "progress_fraction": job.progress_fraction,
-                "message": job.message,
-            }
-    return None
+    job = job_manager.current()
+    if job is None:
+        return None
+    return {
+        "kind": job.kind,
+        "state": job.state.value,
+        "progress_current": job.progress_current,
+        "progress_total": job.progress_total,
+        "progress_fraction": job.progress_fraction,
+        "message": job.message,
+    }
 
 
 async def _base_context(request: Request, session: AsyncSession) -> dict:
@@ -94,6 +94,7 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
         "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],
         "display_timezone": display_settings.timezone,
+        "_overview_stats": stats,  # let ui_overview reuse this instead of re-querying
     }
 
 
@@ -103,10 +104,48 @@ def _redirect(path: str, msg: str | None = None) -> RedirectResponse:
     return RedirectResponse(path, status_code=303)
 
 
+PAGE_SIZE = 50
+
+
+def _paginate(items: list[dict], request: Request, page_size: int = PAGE_SIZE) -> tuple[list[dict], dict]:
+    """Slices an already-fetched, already-filtered item list for display —
+    Review/Queue/Normalize used to render every pending item in one
+    response; for a large first scan (hundreds+ files) that's a multi-MB
+    page and hundreds of DOM nodes. Other query params (filters, etc.) are
+    preserved on the prev/next links.
+    """
+    try:
+        page = max(1, int(request.query_params.get("page", "1")))
+    except ValueError:
+        page = 1
+
+    total = len(items)
+    total_pages = max(1, -(-total // page_size))  # ceil div
+    page = min(page, total_pages)
+    start = (page - 1) * page_size
+    page_items = items[start : start + page_size]
+
+    def _page_url(p: int) -> str:
+        params = dict(request.query_params)
+        params["page"] = str(p)
+        return f"{request.url.path}?{urlencode(params)}"
+
+    return page_items, {
+        "page": page,
+        "total_pages": total_pages,
+        "total": total,
+        "page_size": page_size,
+        "prev_url": _page_url(page - 1) if page > 1 else None,
+        "next_url": _page_url(page + 1) if page < total_pages else None,
+    }
+
+
 @web_router.get("/")
 async def ui_overview(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["stats"] = await overview_stats(session)
+    # _base_context already ran overview_stats for the nav badges — reuse it
+    # instead of querying the same aggregates a second time.
+    ctx["stats"] = ctx["_overview_stats"]
     ctx["recent_history"] = await list_history_items(session, limit=8)
     return templates.TemplateResponse(request, "overview.html", ctx)
 
@@ -148,8 +187,13 @@ async def ui_review(request: Request, session: AsyncSession = Depends(get_sessio
             if q_lower in (i["display_title"] or "").lower() or q_lower in (i["path"] or "").lower()
         ]
 
-    ctx["items"] = items
+    filtered_count = len(items)
+    page_items, pagination = _paginate(items, request)
+
+    ctx["items"] = page_items
+    ctx["filtered_count"] = filtered_count
     ctx["total_count"] = len(all_items)
+    ctx["pagination"] = pagination
     ctx["filters"] = {"library_type": library_type, "language": language, "drop_type": drop_type, "q": q}
     return templates.TemplateResponse(request, "review.html", ctx)
 
@@ -197,7 +241,11 @@ async def ui_skip(change_id: int, session: AsyncSession = Depends(get_session)):
 @web_router.get("/queue")
 async def ui_queue(request: Request, session: AsyncSession = Depends(get_session)):
     ctx = await _base_context(request, session)
-    ctx["items"] = await list_review_items(session, ChangeStatus.approved)
+    all_items = await list_review_items(session, ChangeStatus.approved)
+    page_items, pagination = _paginate(all_items, request)
+    ctx["items"] = page_items
+    ctx["total_count"] = len(all_items)
+    ctx["pagination"] = pagination
     return templates.TemplateResponse(request, "queue.html", ctx)
 
 

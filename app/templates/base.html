@@ -4,7 +4,6 @@
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
 <title>{% block title %}Cleanarr{% endblock %}</title>
-{% if auto_refresh %}<meta http-equiv="refresh" content="2">{% endif %}
 <script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
 <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"/>
@@ -101,8 +100,8 @@
     <div>
       <h3 class="font-label-caps text-label-caps text-on-surface-variant uppercase tracking-wider mb-3 px-3">Normalizer</h3>
       <ul class="space-y-1">
-        {{ nav_link("/normalize", "label", "Normalize", badge=normalize_pending_count) }}
-        {{ nav_link("/normalize/queue", "playlist_add_check", "Normalize Queue", badge=normalize_queued_count) }}
+        {{ nav_link("/normalize", "label", "Normalize", badge=normalize_pending_count, badge_id="nav-badge-normalize") }}
+        {{ nav_link("/normalize/queue", "playlist_add_check", "Normalize Queue", badge=normalize_queued_count, badge_id="nav-badge-normalize-queue") }}
       </ul>
     </div>
     <div>
@@ -131,27 +130,23 @@
   <header class="h-16 flex-shrink-0 glass-panel border-x-0 border-t-0 flex items-center justify-between px-gutter z-10">
     <h1 class="font-headline-sm text-headline-sm text-on-surface">{% block page_title %}{% endblock %}</h1>
     <div class="flex items-center gap-6">
-      {% if current_job %}
-        <div class="flex items-center gap-3">
-          <span class="status-dot status-active animate-pulse"></span>
-          <div class="flex flex-col gap-1 min-w-[180px]">
-            <span class="font-label-caps text-label-caps text-on-surface">
-              {{ current_job.kind|capitalize }} running&hellip;
-              {% if current_job.progress_total %}{{ current_job.progress_current }}/{{ current_job.progress_total }}{% endif %}
-            </span>
-            {% if current_job.progress_total %}
-            <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
-              <div class="h-full bg-primary transition-all" style="width: {{ (((current_job.progress_current + current_job.progress_fraction) / current_job.progress_total) * 100) | round(1) }}%"></div>
-            </div>
+      <div class="flex items-center gap-3" id="job-status-running" {% if not current_job %}hidden{% endif %}>
+        <span class="status-dot status-active animate-pulse"></span>
+        <div class="flex flex-col gap-1 min-w-[180px]">
+          <span class="font-label-caps text-label-caps text-on-surface" id="job-status-label">
+            {% if current_job %}{{ current_job.kind|capitalize }} running&hellip;
+            {% if current_job.progress_total %}{{ current_job.progress_current }}/{{ current_job.progress_total }}{% endif %}
             {% endif %}
+          </span>
+          <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden" id="job-status-track" {% if not (current_job and current_job.progress_total) %}hidden{% endif %}>
+            <div class="h-full bg-primary transition-all" id="job-status-fill" style="width: {% if current_job and current_job.progress_total %}{{ (((current_job.progress_current + current_job.progress_fraction) / current_job.progress_total) * 100) | round(1) }}{% else %}0{% endif %}%"></div>
           </div>
         </div>
-      {% else %}
-        <div class="flex items-center gap-2">
-          <span class="status-dot status-healthy"></span>
-          <span class="font-label-caps text-label-caps text-on-surface">Idle</span>
-        </div>
-      {% endif %}
+      </div>
+      <div class="flex items-center gap-2" id="job-status-idle" {% if current_job %}hidden{% endif %}>
+        <span class="status-dot status-healthy"></span>
+        <span class="font-label-caps text-label-caps text-on-surface">Idle</span>
+      </div>
       <div class="h-6 w-px bg-white/10"></div>
       <form method="post" action="/scan">
         <button type="submit" class="flex items-center gap-2 bg-primary text-on-primary font-label-caps text-label-caps px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">
@@ -173,5 +168,69 @@
     </div>
   </div>
 </main>
+{% if auto_refresh %}
+<script>
+(function () {
+  // A job was already running when this page was rendered — poll a small
+  // JSON endpoint to keep the topbar progress bar and nav badges live,
+  // instead of a full-page meta-refresh reload every 2s (which re-ran
+  // every query on the page, blew away scroll position and in-progress
+  // input, and re-triggered Tailwind's CDN JIT recompile on every single
+  // reload). Once the job actually finishes, reload once so the server
+  // renders whatever changed (new pending items, history).
+  function setBadge(id, value) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.textContent = value;
+    el.classList.toggle("hidden", value === 0);
+  }
+
+  function poll() {
+    fetch("/api/status")
+      .then(function (resp) {
+        if (!resp.ok) throw new Error("status " + resp.status);
+        return resp.json();
+      })
+      .then(function (data) {
+        if (!data.job) {
+          window.location.reload();
+          return;
+        }
+
+        var label = document.getElementById("job-status-label");
+        if (label) {
+          var text = data.job.kind.charAt(0).toUpperCase() + data.job.kind.slice(1) + " running…";
+          if (data.job.progress_total) text += " " + data.job.progress_current + "/" + data.job.progress_total;
+          label.textContent = text;
+        }
+
+        var track = document.getElementById("job-status-track");
+        var fill = document.getElementById("job-status-fill");
+        if (data.job.progress_total) {
+          if (track) track.hidden = false;
+          if (fill) {
+            var pct = ((data.job.progress_current + data.job.progress_fraction) / data.job.progress_total) * 100;
+            fill.style.width = pct.toFixed(1) + "%";
+          }
+        } else if (track) {
+          track.hidden = true;
+        }
+
+        setBadge("nav-badge-review", data.pending_review_count);
+        setBadge("nav-badge-queue", data.queued_count);
+        setBadge("nav-badge-normalize", data.normalize_pending_count);
+        setBadge("nav-badge-normalize-queue", data.normalize_queued_count);
+
+        setTimeout(poll, 2000);
+      })
+      .catch(function () {
+        window.location.reload(); // fall back to the pre-JS behavior on any failure
+      });
+  }
+
+  setTimeout(poll, 2000);
+})();
+</script>
+{% endif %}
 </body>
 </html>
