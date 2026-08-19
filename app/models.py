@@ -58,10 +58,16 @@ class StreamRecord(SQLModel, table=True):
     codec_name: str
     language: str | None = None
     title: str | None = None
+    # Audio only; None for other track types *and* for rows written before
+    # this column existed. app/scanner.py treats a NULL here on an audio
+    # track as "this file predates the column, re-probe it" so the data
+    # backfills itself on the next scan without a forced full rescan.
+    channels: int | None = None
     is_default: bool = False
     is_forced: bool = False
     is_commentary: bool = False
     is_hearing_impaired: bool = False
+    is_visual_impaired: bool = False
 
 
 class PendingChange(SQLModel, table=True):

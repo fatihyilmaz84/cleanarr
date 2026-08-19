@@ -17,7 +17,7 @@ from typing import Callable
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.analyzer import MediaStream
+from app.analyzer import AnalyzerError, MediaStream, probe_file
 from app.mkv_metadata import MkvMetadataError, apply_metadata_changes, is_mkv
 from app.models import ChangeStatus, MediaFile, NormalizationChange, PendingChange, StreamRecord
 from app.normalizer import NormalizerConfig, TrackNormalization, apply_overrides, normalize_streams
@@ -32,6 +32,11 @@ class NormalizeScanSummary:
     files_total: int = 0  # known upfront, for progress reporting
     files_considered: int = 0
     files_with_changes: int = 0
+    # Files skipped because their container can't be edited in place (see
+    # app/mkv_metadata.py — mkvpropedit is Matroska-only). Counted rather
+    # than proposed: proposing a change that apply is guaranteed to reject
+    # just fills the queue with items that always fail.
+    files_unsupported_container: int = 0
     # NormalizationChange.id for every change this run itself created or
     # updated — lets a scheduled normalize_auto_apply act on exactly what
     # this run produced instead of re-querying and sweeping up unrelated
@@ -50,11 +55,12 @@ def _stream_from_record(record: StreamRecord) -> MediaStream:
         codec_name=record.codec_name,
         language=record.language,
         title=record.title,
-        channels=None,
+        channels=record.channels,
         is_default=record.is_default,
         is_forced=record.is_forced,
         is_commentary=record.is_commentary,
         is_hearing_impaired=record.is_hearing_impaired,
+        is_visual_impaired=record.is_visual_impaired,
     )
 
 
@@ -142,11 +148,17 @@ async def propose_normalizations(
     # place on re-propose, not left alone while a second row is created for
     # the same file (the duplicate-queue-entry bug fixed in app/scanner.py;
     # the normalizer had the same shape).
+    # `skipped` is matched too, so a file the user explicitly declined isn't
+    # silently resurrected as a fresh pending row on the next pass. It's
+    # only re-surfaced if the *suggestion itself* changed (different config,
+    # or the file's tracks changed) — see the loop below.
     existing_norm_changes = (
         await session.exec(
             select(NormalizationChange).where(
                 NormalizationChange.file_id.in_(file_ids),
-                NormalizationChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
+                NormalizationChange.status.in_(
+                    [ChangeStatus.pending, ChangeStatus.approved, ChangeStatus.skipped]
+                ),
             )
         )
     ).all()
@@ -164,6 +176,19 @@ async def propose_normalizations(
                 progress_cb(summary)
             continue
 
+        # Containers mkvpropedit can't edit are filtered out *here* rather
+        # than only at apply time — otherwise every pass proposes changes
+        # that apply is guaranteed to reject, and because a `failed` row
+        # isn't matched above, each pass would add another doomed row.
+        if not is_mkv(Path(media_file.path)):
+            summary.files_unsupported_container += 1
+            stale = existing_norm_by_file.get(media_file.id)
+            if stale is not None and stale.status != ChangeStatus.skipped:
+                await session.delete(stale)
+            if progress_cb:
+                progress_cb(summary)
+            continue
+
         # Compute selectors from every physical track (correct positional
         # numbering), then exclude anything currently proposed for removal
         # as an override — never by trimming the input list. See
@@ -177,8 +202,19 @@ async def propose_normalizations(
         existing = existing_norm_by_file.get(media_file.id)
 
         if changed:
-            summary.files_with_changes += 1
             proposed = [_serialize(n) for n in normalizations]
+            if existing is not None and existing.status == ChangeStatus.skipped:
+                if existing.proposed == proposed:
+                    # Same suggestion the user already declined — leave it
+                    # declined instead of re-queueing it every pass.
+                    if progress_cb:
+                        progress_cb(summary)
+                    continue
+                # The suggestion itself changed (different preset, or the
+                # file's tracks changed), so it's worth asking again.
+                existing.status = ChangeStatus.pending
+
+            summary.files_with_changes += 1
             if existing:
                 existing.proposed = proposed
                 # Re-stamped, not preserved — same reasoning as
@@ -239,13 +275,29 @@ async def apply_normalization_change(
 
     path = Path(media_file.path)
 
-    # Re-decide from scratch against the *current* streams and config —
-    # never trust the cached `proposed`, same reasoning as app/apply.py.
-    records = (
-        await session.exec(
-            select(StreamRecord).where(StreamRecord.file_id == media_file.id).order_by(StreamRecord.stream_index)
-        )
-    ).all()
+    if not is_mkv(path):
+        message = "only MKV files are supported for normalization right now"
+        change.status = ChangeStatus.failed
+        change.error_message = message
+        session.add(change)
+        await session.commit()
+        return NormalizeApplyResult(change_id, False, message)
+
+    # Re-probe rather than trusting the cached StreamRecord rows, exactly as
+    # app/apply.py does before a remux. mkvpropedit's track selectors are
+    # *positional* ("second audio track"), so if the file was replaced since
+    # the scan — an *arr upgrade is the common case — cached rows would aim
+    # those selectors at whatever now sits in that position and retitle the
+    # wrong track. Metadata-only, so recoverable, but silently wrong.
+    try:
+        probe = await asyncio.to_thread(probe_file, path)
+    except AnalyzerError as e:
+        change.status = ChangeStatus.failed
+        change.error_message = str(e)
+        session.add(change)
+        await session.commit()
+        return NormalizeApplyResult(change_id, False, str(e))
+
     active_change = (
         await session.exec(
             select(PendingChange).where(
@@ -256,7 +308,7 @@ async def apply_normalization_change(
     ).first()
     dropped = _dropped_indices_from_change(active_change)
 
-    all_streams = [_stream_from_record(r) for r in records]
+    all_streams = probe.streams
     normalizations = normalize_streams(all_streams, config)
     # Both exclusions — currently-proposed-for-removal and the user's own
     # skip selections — are applied the same way, after full-file selector
@@ -272,14 +324,6 @@ async def apply_normalization_change(
         await session.commit()
         return NormalizeApplyResult(change_id, True, "nothing to change, file already matches the naming scheme")
 
-    if not is_mkv(path):
-        message = "only MKV files are supported for normalization right now"
-        change.status = ChangeStatus.failed
-        change.error_message = message
-        session.add(change)
-        await session.commit()
-        return NormalizeApplyResult(change_id, False, message)
-
     try:
         tracks_updated = await asyncio.to_thread(apply_metadata_changes, path, changed)
     except MkvMetadataError as e:
@@ -289,17 +333,35 @@ async def apply_normalization_change(
         await session.commit()
         return NormalizeApplyResult(change_id, False, str(e))
 
-    # Reflect the new titles/defaults in the cached StreamRecord rows so a
-    # future scan/normalize pass doesn't see stale data.
+    # Rebuild the cached StreamRecord rows from the probe we just took, with
+    # the titles/flags we just wrote folded in — the probe is the truth about
+    # this file's track layout, and it may differ from what was cached (that
+    # being exactly why we re-probed above).
+    stale_records = (
+        await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
+    ).all()
+    for record in stale_records:
+        await session.delete(record)
+
     by_index = {n.index: n for n in changed}
-    for record in records:
-        n = by_index.get(record.stream_index)
-        if n is None:
-            continue
-        record.title = n.new_title
-        if n.new_default is not None:
-            record.is_default = n.new_default
-        session.add(record)
+    for s in probe.streams:
+        n = by_index.get(s.index)
+        session.add(
+            StreamRecord(
+                file_id=media_file.id,
+                stream_index=s.index,
+                codec_type=s.codec_type,
+                codec_name=s.codec_name,
+                language=s.language,
+                title=n.new_title if n is not None else s.title,
+                channels=s.channels,
+                is_default=(n.new_default if n is not None and n.new_default is not None else s.is_default),
+                is_forced=s.is_forced,
+                is_commentary=s.is_commentary,
+                is_hearing_impaired=s.is_hearing_impaired,
+                is_visual_impaired=s.is_visual_impaired,
+            )
+        )
 
     change.status = ChangeStatus.applied
     change.error_message = None

@@ -18,6 +18,7 @@ def make_stream(
     is_forced: bool = False,
     is_commentary: bool = False,
     is_hearing_impaired: bool = False,
+    is_visual_impaired: bool = False,
 ) -> MediaStream:
     return MediaStream(
         index=index,
@@ -30,6 +31,7 @@ def make_stream(
         is_forced=is_forced,
         is_commentary=is_commentary,
         is_hearing_impaired=is_hearing_impaired,
+        is_visual_impaired=is_visual_impaired,
     )
 
 

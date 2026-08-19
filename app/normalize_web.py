@@ -78,10 +78,12 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
         preferred_audio_language=form.get("preferred_audio_language", "").strip(),
         preferred_subtitle_language=form.get("preferred_subtitle_language", "").strip(),
         forced_equivalents_enabled="forced_equivalents_enabled" in form,
+        forced_title_patterns=_split_csv(form.get("forced_title_patterns", "")),
         forced_equivalent_patterns=_split_csv(form.get("forced_equivalent_patterns", "")),
         commentary_title_patterns=_split_csv(form.get("commentary_title_patterns", "")),
         hearing_impaired_title_patterns=_split_csv(form.get("hearing_impaired_title_patterns", "")),
         cc_title_patterns=_split_csv(form.get("cc_title_patterns", "")),
+        audio_description_title_patterns=_split_csv(form.get("audio_description_title_patterns", "")),
         original_title_patterns=_split_csv(form.get("original_title_patterns", "")),
         dubbed_title_patterns=_split_csv(form.get("dubbed_title_patterns", "")),
     )

@@ -7,6 +7,7 @@ currently proposes dropping must be excluded from normalization (TODO.md
 
 from __future__ import annotations
 
+import json
 import subprocess
 
 import pytest
@@ -239,8 +240,39 @@ async def test_propose_normalizations_stamps_and_reports_its_preset_and_change_i
         assert summary.change_ids == [change.id]
 
 
-def _fake_mkvpropedit(calls):
-    def run(cmd, capture_output, text, timeout):
+def _ffprobe_payload(streams: list[dict]) -> str:
+    """ffprobe JSON matching the same stream dicts `_seed_file` writes to the
+    DB — applying re-probes the file rather than trusting the cached rows
+    (see app/normalize_service.py), so both have to agree in tests.
+    """
+    return json.dumps(
+        {
+            "format": {"duration": "3600.0"},
+            "streams": [
+                {
+                    "index": s["stream_index"],
+                    "codec_type": s["codec_type"],
+                    "codec_name": s.get("codec_name", "unknown"),
+                    "channels": s.get("channels"),
+                    "tags": {
+                        k: v
+                        for k, v in (("language", s.get("language")), ("title", s.get("title")))
+                        if v is not None
+                    },
+                    "disposition": {},
+                }
+                for s in streams
+            ],
+        }
+    )
+
+
+def _fake_media_tools(calls, streams):
+    """Serves ffprobe from `streams`; records every mkvpropedit call."""
+
+    def run(cmd, capture_output=True, text=True, timeout=None):
+        if cmd[0] == "ffprobe":
+            return subprocess.CompletedProcess(cmd, 0, stdout=_ffprobe_payload(streams), stderr="")
         calls.append(cmd)
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
@@ -250,14 +282,11 @@ def _fake_mkvpropedit(calls):
 @pytest.mark.asyncio
 async def test_apply_normalization_change_runs_mkvpropedit_and_updates_cache(session_factory, tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(subprocess, "run", _fake_mkvpropedit(calls))
+    streams = [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}]
+    monkeypatch.setattr(subprocess, "run", _fake_media_tools(calls, streams))
 
     (tmp_path / "Movie.mkv").write_bytes(b"x")
-    file_id = await _seed_file(
-        session_factory,
-        str(tmp_path / "Movie.mkv"),
-        [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
-    )
+    file_id = await _seed_file(session_factory, str(tmp_path / "Movie.mkv"), streams)
 
     async with session_factory() as session:
         await propose_normalizations(session, NormalizerConfig())
@@ -281,7 +310,11 @@ async def test_apply_normalization_change_runs_mkvpropedit_and_updates_cache(ses
 
 
 @pytest.mark.asyncio
-async def test_apply_normalization_change_rejects_non_mkv(session_factory, tmp_path):
+async def test_propose_skips_containers_mkvpropedit_cannot_edit(session_factory, tmp_path):
+    """mkvpropedit is Matroska-only, so proposing for an .mp4 just queues an
+    item that apply is guaranteed to reject — and since a `failed` row isn't
+    matched on the next pass, every pass would add another doomed row.
+    """
     (tmp_path / "Movie.mp4").write_bytes(b"x")
     await _seed_file(
         session_factory,
@@ -290,8 +323,53 @@ async def test_apply_normalization_change_rejects_non_mkv(session_factory, tmp_p
     )
 
     async with session_factory() as session:
+        summary = await propose_normalizations(session, NormalizerConfig())
+
+    assert summary.files_unsupported_container == 1
+    assert summary.files_with_changes == 0
+    async with session_factory() as session:
+        assert (await session.exec(select(NormalizationChange))).all() == []
+
+
+@pytest.mark.asyncio
+async def test_propose_clears_a_stale_proposal_for_a_now_unsupported_file(session_factory, tmp_path):
+    """Rows left over from before non-MKV files were filtered out (they exist
+    on already-deployed installs) get cleaned up rather than lingering as
+    permanently-unappliable queue entries.
+    """
+    (tmp_path / "Movie.mp4").write_bytes(b"x")
+    file_id = await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mp4"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "aac", "language": "eng"}],
+    )
+    async with session_factory() as session:
+        session.add(NormalizationChange(file_id=file_id, status=ChangeStatus.pending, proposed=[]))
+        await session.commit()
+
+    async with session_factory() as session:
         await propose_normalizations(session, NormalizerConfig())
-        change = (await session.exec(select(NormalizationChange))).one()
+
+    async with session_factory() as session:
+        assert (await session.exec(select(NormalizationChange))).all() == []
+
+
+@pytest.mark.asyncio
+async def test_apply_normalization_change_rejects_non_mkv(session_factory, tmp_path):
+    """Defence in depth: propose filters these out now, but a row queued
+    before that filter existed must still be refused rather than attempted.
+    """
+    (tmp_path / "Movie.mp4").write_bytes(b"x")
+    file_id = await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mp4"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "aac", "language": "eng"}],
+    )
+    async with session_factory() as session:
+        change = NormalizationChange(file_id=file_id, status=ChangeStatus.approved, proposed=[])
+        session.add(change)
+        await session.commit()
+        await session.refresh(change)
         change_id = change.id
 
     async with session_factory() as session:
@@ -304,17 +382,14 @@ async def test_apply_normalization_change_rejects_non_mkv(session_factory, tmp_p
 @pytest.mark.asyncio
 async def test_apply_normalization_change_respects_overrides(session_factory, tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(subprocess, "run", _fake_mkvpropedit(calls))
+    streams = [
+        {"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"},
+        {"stream_index": 1, "codec_type": "subtitle", "codec_name": "subrip", "language": "eng"},
+    ]
+    monkeypatch.setattr(subprocess, "run", _fake_media_tools(calls, streams))
 
     (tmp_path / "Movie.mkv").write_bytes(b"x")
-    await _seed_file(
-        session_factory,
-        str(tmp_path / "Movie.mkv"),
-        [
-            {"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"},
-            {"stream_index": 1, "codec_type": "subtitle", "codec_name": "subrip", "language": "eng"},
-        ],
-    )
+    await _seed_file(session_factory, str(tmp_path / "Movie.mkv"), streams)
 
     async with session_factory() as session:
         await propose_normalizations(session, NormalizerConfig())
@@ -331,3 +406,106 @@ async def test_apply_normalization_change_respects_overrides(session_factory, tm
     assert result.tracks_updated == 1  # only the audio track was written
     assert "track:s1" not in calls[0]
     assert "track:a1" in calls[0]
+
+
+@pytest.mark.asyncio
+async def test_skipping_a_file_is_not_undone_by_the_next_pass(session_factory, tmp_path):
+    """"Skip" used to be pointless: the skipped row wasn't matched on the
+    next pass, so a brand-new pending row was created and the file came
+    straight back.
+    """
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
+    )
+
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+    async with session_factory() as session:
+        change = (await session.exec(select(NormalizationChange))).one()
+        change.status = ChangeStatus.skipped
+        session.add(change)
+        await session.commit()
+
+    async with session_factory() as session:
+        summary = await propose_normalizations(session, NormalizerConfig())
+
+    assert summary.files_with_changes == 0
+    async with session_factory() as session:
+        rows = (await session.exec(select(NormalizationChange))).all()
+        assert [r.status for r in rows] == [ChangeStatus.skipped]
+
+
+@pytest.mark.asyncio
+async def test_a_skipped_file_comes_back_when_the_suggestion_itself_changes(session_factory, tmp_path):
+    """The other half of skip durability — declining one suggestion must not
+    mute the file forever if the config later proposes something different.
+    """
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}],
+    )
+
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+    async with session_factory() as session:
+        change = (await session.exec(select(NormalizationChange))).one()
+        change.status = ChangeStatus.skipped
+        session.add(change)
+        await session.commit()
+
+    # Same file, different naming scheme -> a genuinely different proposal.
+    async with session_factory() as session:
+        await propose_normalizations(
+            session, NormalizerConfig(auto_default_audio=True, preferred_audio_language="English")
+        )
+
+    async with session_factory() as session:
+        rows = (await session.exec(select(NormalizationChange))).all()
+        assert [r.status for r in rows] == [ChangeStatus.pending]
+
+
+@pytest.mark.asyncio
+async def test_apply_reprobes_and_does_not_trust_stale_cached_tracks(session_factory, tmp_path, monkeypatch):
+    """mkvpropedit selectors are positional, so applying against a stale
+    cache retitles whatever now sits in that position. The file here has been
+    replaced since the scan (an *arr upgrade): the cache says one eng audio
+    track, the file actually has jpn first and eng second.
+    """
+    calls = []
+    cached = [{"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "eng"}]
+    on_disk = [
+        {"stream_index": 0, "codec_type": "audio", "codec_name": "ac3", "language": "jpn"},
+        {"stream_index": 1, "codec_type": "audio", "codec_name": "ac3", "language": "eng"},
+    ]
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    file_id = await _seed_file(session_factory, str(tmp_path / "Movie.mkv"), cached)
+
+    monkeypatch.setattr(subprocess, "run", _fake_media_tools(calls, cached))
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+        change_id = (await session.exec(select(NormalizationChange))).one().id
+
+    # The file changes underneath us between propose and apply.
+    monkeypatch.setattr(subprocess, "run", _fake_media_tools(calls, on_disk))
+    async with session_factory() as session:
+        result = await apply_normalization_change(session, change_id, NormalizerConfig())
+
+    assert result.success is True
+    # Titles follow the file's real layout, not the cache: a1 is Japanese.
+    assert "name=Japanese" in calls[0]
+    assert "name=English" in calls[0]
+
+    async with session_factory() as session:
+        records = (
+            await session.exec(select(StreamRecord).where(StreamRecord.file_id == file_id).order_by(StreamRecord.stream_index))
+        ).all()
+        # Cache rebuilt from the probe, so it now reflects reality.
+        assert [(r.stream_index, r.language, r.title) for r in records] == [
+            (0, "jpn", "Japanese"),
+            (1, "eng", "English"),
+        ]

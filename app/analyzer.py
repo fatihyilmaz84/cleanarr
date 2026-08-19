@@ -26,6 +26,10 @@ class MediaStream:
     is_forced: bool
     is_commentary: bool
     is_hearing_impaired: bool
+    # ffprobe's `visual_impaired` disposition — an audio-description track.
+    # Read so the normalizer can keep that marker instead of retitling such a
+    # track to a plain language name, indistinguishable from the main audio.
+    is_visual_impaired: bool = False
 
     @classmethod
     def from_ffprobe_stream(cls, s: dict) -> "MediaStream":
@@ -49,6 +53,7 @@ class MediaStream:
             is_forced=bool(disposition.get("forced")),
             is_commentary=bool(disposition.get("comment")),
             is_hearing_impaired=bool(disposition.get("hearing_impaired")),
+            is_visual_impaired=bool(disposition.get("visual_impaired")),
         )
 
 

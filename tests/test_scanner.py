@@ -232,3 +232,53 @@ async def test_run_scan_with_no_deadline_behaves_exactly_as_before(tmp_path, mul
     assert summary.stopped_early is False
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rescan_reprobes_a_file_whose_cached_tracks_predate_the_channels_column(
+    tmp_path, media_dir, monkeypatch
+):
+    """`channels` was added after these rows were written, so it's NULL on an
+    upgraded install — and the normalizer needs it to tell a 5.1 and a stereo
+    track of the same language apart. Missing data counts as a reason to
+    re-probe so it backfills itself, rather than needing a forced rescan.
+    """
+    probe_calls = []
+    monkeypatch.setattr("app.scanner.probe_file", lambda path: (probe_calls.append(path), _make_probe(path))[1])
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+    media_paths = [MediaPath(path=str(media_dir), library_type="movie")]
+
+    async with session_factory() as session:
+        await run_scan(session, media_paths, RuleConfig())
+    assert len(probe_calls) == 1
+
+    # An unchanged file is normally never re-probed...
+    async with session_factory() as session:
+        summary = await run_scan(session, media_paths, RuleConfig())
+    assert summary.files_skipped_unchanged == 1
+    assert len(probe_calls) == 1
+
+    # ...but blank out channels the way an upgraded DB would have it.
+    from app.models import StreamRecord
+
+    async with session_factory() as session:
+        for record in (await session.exec(select(StreamRecord))).all():
+            record.channels = None
+            session.add(record)
+        await session.commit()
+
+    async with session_factory() as session:
+        summary = await run_scan(session, media_paths, RuleConfig())
+
+    assert summary.files_scanned == 1  # re-probed to backfill
+    assert len(probe_calls) == 2
+    async with session_factory() as session:
+        audio = (
+            await session.exec(select(StreamRecord).where(StreamRecord.codec_type == "audio"))
+        ).all()
+        assert all(r.channels is not None for r in audio)
+
+    await engine.dispose()

@@ -269,10 +269,13 @@ def submit_normalize_scan_job(
         job.result = {
             "files_considered": summary.files_considered,
             "files_with_changes": summary.files_with_changes,
+            "files_unsupported_container": summary.files_unsupported_container,
             "errors": summary.errors,
             "stopped_early": summary.stopped_early,
         }
         job.message = f"considered {summary.files_considered} file(s), {summary.files_with_changes} need changes"
+        if summary.files_unsupported_container:
+            job.message += f", {summary.files_unsupported_container} skipped (only MKV can be edited in place)"
         if summary.stopped_early:
             job.message += " — stopped early, hit the schedule's time window"
 

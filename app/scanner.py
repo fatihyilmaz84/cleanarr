@@ -128,11 +128,12 @@ def _stream_from_record(record: StreamRecord) -> MediaStream:
         codec_name=record.codec_name,
         language=record.language,
         title=record.title,
-        channels=None,
+        channels=record.channels,
         is_default=record.is_default,
         is_forced=record.is_forced,
         is_commentary=record.is_commentary,
         is_hearing_impaired=record.is_hearing_impaired,
+        is_visual_impaired=record.is_visual_impaired,
     )
 
 
@@ -151,7 +152,25 @@ async def _scan_one_file(
     result = await session.exec(select(MediaFile).where(MediaFile.path == path_str))
     media_file = result.one_or_none()
 
-    unchanged = media_file is not None and media_file.size_bytes == stat.st_size and media_file.mtime == stat.st_mtime
+    existing_streams = []
+    if media_file is not None:
+        existing_streams = (
+            await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
+        ).all()
+
+    # A file scanned before the `channels`/`is_visual_impaired` columns
+    # existed has NULL there. The normalizer needs channel counts to tell a
+    # 5.1 and a stereo track of the same language apart, so treat missing
+    # data as a reason to re-probe — that way an upgraded install backfills
+    # itself on the next scan instead of needing a forced full rescan.
+    needs_backfill = any(s.codec_type == "audio" and s.channels is None for s in existing_streams)
+
+    unchanged = (
+        media_file is not None
+        and media_file.size_bytes == stat.st_size
+        and media_file.mtime == stat.st_mtime
+        and not needs_backfill
+    )
 
     if unchanged:
         # Skip the expensive ffprobe re-run, but rule evaluation and
@@ -159,9 +178,6 @@ async def _scan_one_file(
         # already on file — those are cheap and must reflect the *current*
         # rules/arr connection even for a file whose bytes haven't moved.
         summary.files_skipped_unchanged += 1
-        existing_streams = (
-            await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
-        ).all()
         streams = [_stream_from_record(s) for s in existing_streams]
     else:
         probe = await asyncio.to_thread(probe_file, file_path)
@@ -181,9 +197,6 @@ async def _scan_one_file(
         await session.flush()
         await session.refresh(media_file)
 
-        existing_streams = (
-            await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))
-        ).all()
         for s in existing_streams:
             await session.delete(s)
 
@@ -196,10 +209,12 @@ async def _scan_one_file(
                     codec_name=s.codec_name,
                     language=s.language,
                     title=s.title,
+                    channels=s.channels,
                     is_default=s.is_default,
                     is_forced=s.is_forced,
                     is_commentary=s.is_commentary,
                     is_hearing_impaired=s.is_hearing_impaired,
+                    is_visual_impaired=s.is_visual_impaired,
                 )
             )
         streams = probe.streams

@@ -43,6 +43,9 @@ async def init_db(engine: AsyncEngine) -> None:
         await _add_missing_columns(conn, "media_files", {"original_language": "VARCHAR"})
         await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON", "rule_preset_id": "VARCHAR"})
         await _add_missing_columns(conn, "normalization_changes", {"normalizer_preset_id": "VARCHAR"})
+        await _add_missing_columns(
+            conn, "streams", {"channels": "INTEGER", "is_visual_impaired": "BOOLEAN DEFAULT 0"}
+        )
         await _add_missing_index(conn, "ix_pending_changes_status", "pending_changes", "status")
         await _add_missing_index(conn, "ix_normalization_changes_status", "normalization_changes", "status")
 

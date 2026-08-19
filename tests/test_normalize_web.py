@@ -5,6 +5,7 @@ that it renders as a genuinely separate page from Rules/Review/Queue.
 
 from __future__ import annotations
 
+import json
 import subprocess
 import time
 
@@ -30,6 +31,37 @@ def _wait_for_idle(client: TestClient, timeout: float = 5.0) -> None:
             return
         time.sleep(0.02)
     raise TimeoutError("no job settled in time")
+
+
+def _fake_media_tools(calls):
+    """Serves ffprobe for the single eng audio track `_seed_mkv` writes, and
+    records mkvpropedit calls. Applying re-probes the file rather than
+    trusting cached rows (see app/normalize_service.py), so ffprobe has to
+    agree with what was seeded.
+    """
+    payload = json.dumps(
+        {
+            "format": {"duration": "3600.0"},
+            "streams": [
+                {
+                    "index": 0,
+                    "codec_type": "audio",
+                    "codec_name": "ac3",
+                    "channels": 6,
+                    "tags": {"language": "eng"},
+                    "disposition": {},
+                }
+            ],
+        }
+    )
+
+    def run(cmd, capture_output=True, text=True, timeout=None):
+        if cmd[0] == "ffprobe":
+            return subprocess.CompletedProcess(cmd, 0, stdout=payload, stderr="")
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    return run
 
 
 async def _seed_mkv(session_factory, path) -> int:
@@ -89,12 +121,7 @@ def test_full_normalize_scan_approve_queue_run_flow(client: TestClient, tmp_path
     asyncio.run(_seed_mkv(client.app.state.session_factory, movie))
 
     calls = []
-
-    def fake_run(cmd, capture_output, text, timeout):
-        calls.append(cmd)
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
-
-    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(subprocess, "run", _fake_media_tools(calls))
 
     resp = client.post("/normalize/scan")
     assert resp.status_code == 200

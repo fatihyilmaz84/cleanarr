@@ -91,10 +91,12 @@ async def apply_pending_change(
                 codec_name=d.stream.codec_name,
                 language=d.stream.language,
                 title=d.stream.title,
+                channels=d.stream.channels,
                 is_default=d.stream.is_default,
                 is_forced=d.stream.is_forced,
                 is_commentary=d.stream.is_commentary,
                 is_hearing_impaired=d.stream.is_hearing_impaired,
+                is_visual_impaired=d.stream.is_visual_impaired,
             )
         )
 
