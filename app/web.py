@@ -164,6 +164,13 @@ async def ui_approve(change_id: int, request: Request, session: AsyncSession = D
     change = await session.get(PendingChange, change_id)
     if change is not None:
         form = await request.form()
+        # A legitimate "uncheck everything, force-keep every track" submit
+        # still carries this hidden field (see review.html); its absence
+        # means the POST didn't come from the real form at all (malformed,
+        # stripped, or missing body) — reject rather than silently treating
+        # it as "drop nothing".
+        if "approve_submitted" not in form:
+            return _redirect("/review", "Approve failed — malformed submission, nothing changed.")
         # Every proposed-drop stream renders as a checked-by-default
         # checkbox (see review.html) — whatever stayed checked is what
         # actually gets dropped; anything unchecked becomes an override

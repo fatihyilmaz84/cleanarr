@@ -159,7 +159,9 @@ def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
     # template) — with none, nothing would be confirmed for drop.
     drop_indices = [str(p["index"]) for p in pending[0]["proposed"] if not p["keep"]]
 
-    resp = client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
+    resp = client.post(
+        f"/review/{change_id}/approve", data={"drop_index": drop_indices, "approve_submitted": "1"}
+    )
     assert resp.status_code == 200
 
     queue_page = client.get("/queue")
@@ -228,7 +230,9 @@ def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
         audio_index = next(d["index"] for d in dropped if d["type"] == "audio")
 
         # Only confirm the audio drop — leave the tur subtitle's checkbox off.
-        c.post(f"/review/{change['id']}/approve", data={"drop_index": str(audio_index)})
+        c.post(
+            f"/review/{change['id']}/approve", data={"drop_index": str(audio_index), "approve_submitted": "1"}
+        )
 
         queue_page = c.get("/queue").text
         assert "DROP audio jpn" in queue_page and "DROP subtitle tur" not in queue_page  # override reflected
@@ -239,6 +243,24 @@ def test_partial_approve_keeps_unchecked_drop(tmp_path, monkeypatch):
         history = c.get("/api/history").json()
         assert len(history[0]["streams_removed"]) == 1
         assert history[0]["streams_removed"][0]["language"] == "jpn"
+
+        # The surviving subtitle track was originally stream index 3, but
+        # the audio-jpn track at index 2 was dropped ahead of it in the
+        # remux — its real position in the remuxed file (and thus the
+        # StreamRecord that must be written) is a sequential renumbering
+        # among the *kept* tracks (0=video, 1=audio-eng, 2=subtitle-tur),
+        # not its stale pre-remux index.
+        from sqlmodel import select
+
+        from app.models import StreamRecord
+
+        async def _get_stream_indices():
+            async with c.app.state.session_factory() as session:
+                records = (await session.exec(select(StreamRecord))).all()
+                return sorted((r.stream_index, r.codec_type, r.language) for r in records)
+
+        indices = asyncio.run(_get_stream_indices())
+        assert indices == [(0, "video", None), (1, "audio", "eng"), (2, "subtitle", "tur")]
 
 
 def test_schedule_add_toggle_delete_via_form(client: TestClient):
@@ -337,7 +359,7 @@ def test_queue_run_and_remove(client: TestClient, media_dir: Path):
     pending = client.get("/api/review", params={"status": "pending"}).json()
     change_id = pending[0]["id"]
     drop_indices = [str(p["index"]) for p in pending[0]["proposed"] if not p["keep"]]
-    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
+    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices, "approve_submitted": "1"})
 
     # queued, not yet applied
     assert client.get("/api/review", params={"status": "pending"}).json() == []
@@ -352,7 +374,7 @@ def test_queue_run_and_remove(client: TestClient, media_dir: Path):
     assert len(client.get("/api/review", params={"status": "pending"}).json()) == 1
 
     # re-queue and actually run it this time
-    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices})
+    client.post(f"/review/{change_id}/approve", data={"drop_index": drop_indices, "approve_submitted": "1"})
     resp = client.post("/queue/run")
     assert "Running 1 queued change" in resp.text
     _wait_for_idle(client)

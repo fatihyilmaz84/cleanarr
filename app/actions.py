@@ -125,12 +125,14 @@ def submit_scan_job(
             job.message += " — stopped early, hit the schedule's time window"
 
         ids_to_apply: list[int] = []
+        if auto_apply:
+            # Scoped to exactly what *this* scan run produced/updated (see
+            # ScanSummary.pending_change_ids) — never a fresh query for
+            # every pending change, which would also sweep up stale changes
+            # left over from an earlier manual scan the user hasn't
+            # reviewed yet.
+            ids_to_apply.extend(summary.pending_change_ids)
         async with session_factory() as session:
-            if auto_apply and summary.files_with_pending_changes:
-                pending = (
-                    await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.pending))
-                ).all()
-                ids_to_apply.extend(c.id for c in pending)
             if apply_queued:
                 queued = (
                     await session.exec(select(PendingChange).where(PendingChange.status == ChangeStatus.approved))
@@ -180,6 +182,7 @@ def submit_normalize_scan_job(session_factory: async_sessionmaker, job_manager: 
 
         def progress_cb(summary: NormalizeScanSummary) -> None:
             job.progress_current = summary.files_considered
+            job.progress_total = summary.files_total
             job.message = f"normalizing… {summary.files_considered} file(s) considered"
 
         async with session_factory() as session:

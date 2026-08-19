@@ -63,6 +63,7 @@
       {% endfor %}
     </div>
     <form method="post" action="/review/{{ item.id }}/approve" class="review-item-form">
+      <input type="hidden" name="approve_submitted" value="1">
       {% if item.dropped|length > 1 %}
       <div class="flex items-center gap-2 mb-1.5">
         <button type="button" onclick="this.form.querySelectorAll('input[name=drop_index]').forEach(function(cb){cb.checked = true})" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface underline underline-offset-2">Drop all</button>

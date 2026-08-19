@@ -5,13 +5,13 @@ directly reusable by the review UI to render a preview.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from app.analyzer import MediaProbe, MediaStream
 from app.languages import iso_codes_for_language_name
+from app.text_patterns import matches_any_pattern
 
 
 class RuleConfig(BaseModel):
@@ -63,18 +63,6 @@ class StreamDecision:
     reason: str
 
 
-def _matches_drop_pattern(title: str | None, patterns: list[str]) -> str | None:
-    if not title:
-        return None
-    for pattern in patterns:
-        try:
-            if re.search(pattern, title, re.IGNORECASE):
-                return pattern
-        except re.error:
-            continue
-    return None
-
-
 def _matches_original_language(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> bool:
     return (
         config.always_keep_original_language
@@ -90,7 +78,7 @@ def _commentary_reason(stream: MediaStream, config: RuleConfig) -> str | None:
     """
     if stream.is_commentary:
         return "commentary track (disposition flag)"
-    pattern = _matches_drop_pattern(stream.title, config.commentary_title_patterns)
+    pattern = matches_any_pattern(stream.title, config.commentary_title_patterns)
     if pattern:
         return f"title matches commentary pattern '{pattern}'"
     return None
@@ -100,14 +88,14 @@ def _hearing_impaired_reason(stream: MediaStream, config: RuleConfig) -> str | N
     """Same idea as `_commentary_reason`, for hearing-impaired (SDH) subs."""
     if stream.is_hearing_impaired:
         return "hearing-impaired subtitle (disposition flag)"
-    pattern = _matches_drop_pattern(stream.title, config.hearing_impaired_title_patterns)
+    pattern = matches_any_pattern(stream.title, config.hearing_impaired_title_patterns)
     if pattern:
         return f"title matches hearing-impaired pattern '{pattern}'"
     return None
 
 
 def _decide_audio(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> StreamDecision:
-    drop_pattern = _matches_drop_pattern(stream.title, config.drop_title_patterns)
+    drop_pattern = matches_any_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
         return StreamDecision(stream, False, f"title matches drop pattern '{drop_pattern}'")
 
@@ -137,7 +125,7 @@ def _decide_subtitle(stream: MediaStream, config: RuleConfig, original_language_
     if stream.is_forced and config.always_keep_forced_subtitles:
         return StreamDecision(stream, True, "forced subtitle, always kept")
 
-    drop_pattern = _matches_drop_pattern(stream.title, config.drop_title_patterns)
+    drop_pattern = matches_any_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
         return StreamDecision(stream, False, f"title matches drop pattern '{drop_pattern}'")
 

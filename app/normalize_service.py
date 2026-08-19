@@ -29,6 +29,7 @@ def _now():
 
 @dataclass
 class NormalizeScanSummary:
+    files_total: int = 0  # known upfront, for progress reporting
     files_considered: int = 0
     files_with_changes: int = 0
     errors: list[str] = field(default_factory=list)
@@ -49,22 +50,19 @@ def _stream_from_record(record: StreamRecord) -> MediaStream:
     )
 
 
-async def _dropped_indices_for_file(session: AsyncSession, file_id: int) -> set[int]:
+def _dropped_indices_from_change(change: PendingChange | None) -> set[int]:
     """Stream indices app/rules.py's drop engine currently proposes removing
-    for this file (status pending or approved) — excluded from
-    normalization, since there's nothing left to retitle once a track is
-    gone. See TODO.md #7's per-track exclusivity note; the reverse
-    direction (a normalize-selected track protected from removal) is
-    handled on the rules.py side via the same PendingChange.overrides
-    mechanism, not here.
+    for a file (given its pending-or-approved PendingChange row, if any) —
+    excluded from normalization *output* (see propose_normalizations/
+    apply_normalization_change below), since there's nothing left to
+    retitle once a track is actually gone. Deliberately NOT used to filter
+    the *input* to normalize_streams() — its mkvpropedit track selectors
+    are positional, computed from a track's real rank among the file's
+    physical tracks, so trimming the input list before computing them
+    would shift every later same-type selector and corrupt which physical
+    track gets edited. The exclusion is applied afterwards instead, via
+    apply_overrides — see the callers.
     """
-    result = await session.exec(
-        select(PendingChange).where(
-            PendingChange.file_id == file_id,
-            PendingChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
-        )
-    )
-    change = result.first()
     if change is None:
         return set()
     overrides = set(change.overrides or [])
@@ -95,31 +93,63 @@ async def propose_normalizations(
     summary = NormalizeScanSummary()
 
     media_files = (await session.exec(select(MediaFile))).all()
+    summary.files_total = len(media_files)
+    if not media_files:
+        return summary
+
+    file_ids = [mf.id for mf in media_files]
+
+    # Batch-fetch everything up front instead of one query per file inside
+    # the loop (an N+1 pattern that meant ~3 queries + a commit per file —
+    # for a several-thousand-file library, tens of thousands of round
+    # trips for what should be a fast, ffprobe-free pass).
+    all_records = (
+        await session.exec(
+            select(StreamRecord).where(StreamRecord.file_id.in_(file_ids)).order_by(StreamRecord.stream_index)
+        )
+    ).all()
+    records_by_file: dict[int, list[StreamRecord]] = {}
+    for r in all_records:
+        records_by_file.setdefault(r.file_id, []).append(r)
+
+    active_pending_changes = (
+        await session.exec(
+            select(PendingChange).where(
+                PendingChange.file_id.in_(file_ids),
+                PendingChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
+            )
+        )
+    ).all()
+    pending_change_by_file: dict[int, PendingChange] = {c.file_id: c for c in active_pending_changes}
+
+    existing_norm_changes = (
+        await session.exec(
+            select(NormalizationChange).where(
+                NormalizationChange.file_id.in_(file_ids), NormalizationChange.status == ChangeStatus.pending
+            )
+        )
+    ).all()
+    existing_norm_by_file: dict[int, NormalizationChange] = {c.file_id: c for c in existing_norm_changes}
+
     for media_file in media_files:
         summary.files_considered += 1
-        records = (
-            await session.exec(
-                select(StreamRecord).where(StreamRecord.file_id == media_file.id).order_by(StreamRecord.stream_index)
-            )
-        ).all()
+        records = records_by_file.get(media_file.id, [])
         if not records:
             if progress_cb:
                 progress_cb(summary)
             continue
 
-        dropped = await _dropped_indices_for_file(session, media_file.id)
-        eligible_streams = [_stream_from_record(r) for r in records if r.stream_index not in dropped]
-
-        normalizations = normalize_streams(eligible_streams, config)
+        # Compute selectors from every physical track (correct positional
+        # numbering), then exclude anything currently proposed for removal
+        # as an override — never by trimming the input list. See
+        # _dropped_indices_from_change's docstring.
+        all_streams = [_stream_from_record(r) for r in records]
+        dropped = _dropped_indices_from_change(pending_change_by_file.get(media_file.id))
+        normalizations = normalize_streams(all_streams, config)
+        normalizations = apply_overrides(normalizations, sorted(dropped))
         changed = [n for n in normalizations if n.changed]
 
-        existing = (
-            await session.exec(
-                select(NormalizationChange).where(
-                    NormalizationChange.file_id == media_file.id, NormalizationChange.status == ChangeStatus.pending
-                )
-            )
-        ).one_or_none()
+        existing = existing_norm_by_file.get(media_file.id)
 
         if changed:
             summary.files_with_changes += 1
@@ -135,10 +165,10 @@ async def propose_normalizations(
             # it was queued) — the stale suggestion no longer applies.
             await session.delete(existing)
 
-        await session.commit()
         if progress_cb:
             progress_cb(summary)
 
+    await session.commit()
     return summary
 
 
@@ -176,10 +206,23 @@ async def apply_normalization_change(
             select(StreamRecord).where(StreamRecord.file_id == media_file.id).order_by(StreamRecord.stream_index)
         )
     ).all()
-    dropped = await _dropped_indices_for_file(session, media_file.id)
-    eligible_streams = [_stream_from_record(r) for r in records if r.stream_index not in dropped]
-    normalizations = normalize_streams(eligible_streams, config)
-    normalizations = apply_overrides(normalizations, change.overrides)
+    active_change = (
+        await session.exec(
+            select(PendingChange).where(
+                PendingChange.file_id == media_file.id,
+                PendingChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
+            )
+        )
+    ).first()
+    dropped = _dropped_indices_from_change(active_change)
+
+    all_streams = [_stream_from_record(r) for r in records]
+    normalizations = normalize_streams(all_streams, config)
+    # Both exclusions — currently-proposed-for-removal and the user's own
+    # skip selections — are applied the same way, after full-file selector
+    # computation, for the same reason: neither may safely trim the input.
+    skip_indices = sorted(dropped | set(change.overrides or []))
+    normalizations = apply_overrides(normalizations, skip_indices)
     changed = [n for n in normalizations if n.changed]
 
     if not changed:

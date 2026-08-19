@@ -38,6 +38,11 @@ class ScanSummary:
     files_scanned: int = 0  # actually re-ffprobed (new or changed since last scan)
     files_skipped_unchanged: int = 0
     files_with_pending_changes: int = 0
+    # PendingChange.id for every change this scan run itself created/updated —
+    # lets a caller (e.g. a scheduled auto_apply) act on exactly what this
+    # run produced without re-querying and picking up unrelated pending
+    # changes left over from a previous manual scan. See app/actions.py.
+    pending_change_ids: list[int] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     arr_warnings: list[str] = field(default_factory=list)
     # True if a `deadline` (see run_scan) was hit before every file could be
@@ -160,7 +165,10 @@ async def _scan_one_file(
         media_file.library_type = library_type
         media_file.last_scanned_at = _now()
         session.add(media_file)
-        await session.commit()
+        # flush (not commit) — assigns media_file.id for the StreamRecords
+        # below without ending the transaction, so the whole file is still
+        # one commit at the bottom instead of two or three.
+        await session.flush()
         await session.refresh(media_file)
 
         existing_streams = (
@@ -196,16 +204,20 @@ async def _scan_one_file(
         media_file.arr_kind = arr_info.kind
         media_file.original_language = arr_info.original_language
     session.add(media_file)
-    await session.commit()
 
     fake_probe = MediaProbe(path=file_path, duration_seconds=None, streams=streams)
     decisions = decide(fake_probe, rule_config, media_file.original_language)
     dropped = [d for d in decisions if not d.keep]
 
+    # Match pending *and* approved — a change already queued (approved) must
+    # be updated in place on rescan, not left alone while a second
+    # PendingChange row gets created for the same file (duplicate queue
+    # entries covering the same tracks).
     existing_change = (
         await session.exec(
             select(PendingChange).where(
-                PendingChange.file_id == media_file.id, PendingChange.status == ChangeStatus.pending
+                PendingChange.file_id == media_file.id,
+                PendingChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
             )
         )
     ).one_or_none()
@@ -228,8 +240,19 @@ async def _scan_one_file(
             existing_change.proposed = proposed
             existing_change.updated_at = _now()
             session.add(existing_change)
+            await session.flush()
+            # Only surface it for auto_apply if it's still pending — an
+            # approved (queued) change was already reviewed by a human, so
+            # refreshing its proposed content here doesn't make it fair
+            # game for unattended auto_apply; apply_queued (a separate
+            # opt-in) covers it instead.
+            if existing_change.status == ChangeStatus.pending:
+                summary.pending_change_ids.append(existing_change.id)
         else:
-            session.add(PendingChange(file_id=media_file.id, status=ChangeStatus.pending, proposed=proposed))
+            new_change = PendingChange(file_id=media_file.id, status=ChangeStatus.pending, proposed=proposed)
+            session.add(new_change)
+            await session.flush()
+            summary.pending_change_ids.append(new_change.id)
     elif existing_change:
         # File now matches the rules (e.g. rules changed since it was queued)
         # — the stale suggestion no longer applies.

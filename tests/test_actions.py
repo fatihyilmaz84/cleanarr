@@ -195,6 +195,46 @@ def test_auto_apply_and_apply_queued_combine_without_duplicates(client: TestClie
     assert len(client.get("/api/history").json()) == 1
 
 
+def test_auto_apply_does_not_sweep_up_unrelated_stale_pending_changes(client: TestClient, tmp_path):
+    """A pending change left over from an earlier manual scan of a file this
+    scan run never touches (e.g. it's outside the currently configured media
+    paths) must not get silently auto-applied — auto_apply is scoped to
+    exactly what *this* scan run itself produced (ScanSummary.pending_change_ids),
+    not "every pending change in the database". See TODO.md #3 / code review.
+    """
+    from app.actions import submit_scan_job
+
+    async def _seed_orphan_pending_change(session_factory) -> int:
+        async with session_factory() as session:
+            mf = MediaFile(
+                path=str(tmp_path / "elsewhere" / "Other Movie.mkv"),
+                library_type=LibraryType.movie,
+                size_bytes=1,
+                mtime=1.0,
+            )
+            session.add(mf)
+            await session.commit()
+            await session.refresh(mf)
+            change = PendingChange(file_id=mf.id, status=ChangeStatus.pending, proposed=PROPOSED)
+            session.add(change)
+            await session.commit()
+            await session.refresh(change)
+            return change.id
+
+    orphan_change_id = asyncio.run(_seed_orphan_pending_change(client.app.state.session_factory))
+
+    job_id = submit_scan_job(client.app.state.session_factory, client.app.state.job_manager, auto_apply=True)
+    job = _wait_for_job(client, job_id)
+
+    # Only the one file actually under the configured media path was applied.
+    assert job["result"]["applied"] == {"attempted": 1, "succeeded": 1, "stopped_early": False}
+
+    pending_ids = {c["id"] for c in client.get("/api/review", params={"status": "pending"}).json()}
+    assert orphan_change_id in pending_ids  # untouched, never applied
+    applied_ids = {c["id"] for c in client.get("/api/review", params={"status": "applied"}).json()}
+    assert orphan_change_id not in applied_ids
+
+
 def test_deadline_already_elapsed_skips_apply_phase_entirely(client: TestClient, monkeypatch):
     from app.actions import submit_scan_job
 

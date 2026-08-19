@@ -116,8 +116,15 @@ async def test_propose_normalizations_excludes_track_marked_for_removal(session_
 
     async with session_factory() as session:
         change = (await session.exec(select(NormalizationChange))).one()
-        indices = {p["index"] for p in change.proposed}
-        assert indices == {0}  # index 1 (marked for removal) excluded entirely
+        by_index = {p["index"]: p for p in change.proposed}
+        # Both tracks are present — selectors are computed from the full
+        # physical track list, never a trimmed one (see
+        # _dropped_indices_from_change's docstring in app/normalize_service.py)
+        # — but the track marked for removal is excluded from the actual
+        # *output*: it's left unchanged rather than retitled.
+        assert set(by_index) == {0, 1}
+        assert by_index[0]["changed"] is True
+        assert by_index[1]["changed"] is False
 
 
 @pytest.mark.asyncio

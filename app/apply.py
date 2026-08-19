@@ -79,13 +79,14 @@ async def apply_pending_change(
     existing_streams = (await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))).all()
     for s in existing_streams:
         await session.delete(s)
-    for d in decisions:
-        if not d.keep:
-            continue
+    # New index is the track's position among the *kept* streams, in the same
+    # order app/remux.py::build_ffmpeg_command emits its `-map` flags — that's
+    # the stream's real index in the remuxed file, not its pre-remux index.
+    for new_index, d in enumerate(d for d in decisions if d.keep):
         session.add(
             StreamRecord(
                 file_id=media_file.id,
-                stream_index=d.stream.index,
+                stream_index=new_index,
                 codec_type=d.stream.codec_type,
                 codec_name=d.stream.codec_name,
                 language=d.stream.language,

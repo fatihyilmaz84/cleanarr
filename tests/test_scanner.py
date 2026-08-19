@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
+from sqlmodel import select
 
 from app.analyzer import MediaProbe, MediaStream
 from app.arr_client import ArrClient
@@ -64,6 +65,54 @@ async def test_rescan_applies_new_rules_without_reprobing(tmp_path, media_dir, m
     assert summary2.files_skipped_unchanged == 1
     assert summary2.files_with_pending_changes == 1
     assert len(probe_calls) == 1  # still only ever probed once
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_rescan_updates_already_queued_change_instead_of_duplicating(tmp_path, media_dir, monkeypatch):
+    """A file whose PendingChange has already been approved (queued by a
+    human) must have that same row updated on rescan, never get a second
+    PendingChange row created alongside it — a rescan can happen at any time
+    (scheduled, or the user hits Scan Now) while something already sits in
+    the Queue.
+    """
+    monkeypatch.setattr("app.scanner.probe_file", lambda path: (_make_probe(path)))
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+    media_paths = [MediaPath(path=str(media_dir), library_type="movie")]
+
+    async with session_factory() as session:
+        summary1 = await run_scan(session, media_paths, RuleConfig(audio_keep_languages=["eng"]))
+    assert summary1.files_with_pending_changes == 1
+    assert len(summary1.pending_change_ids) == 1
+    change_id = summary1.pending_change_ids[0]
+
+    from app.models import ChangeStatus, PendingChange
+
+    async with session_factory() as session:
+        change = await session.get(PendingChange, change_id)
+        change.status = ChangeStatus.approved
+        session.add(change)
+        await session.commit()
+
+    # Rescan with the same rules — the file still has a track to drop, and
+    # its change is already approved/queued.
+    async with session_factory() as session:
+        summary2 = await run_scan(session, media_paths, RuleConfig(audio_keep_languages=["eng"]))
+
+    # Not surfaced for auto_apply (it's approved, a human already queued it —
+    # see app/scanner.py's pending_change_ids docstring), but it also must
+    # not have spawned a duplicate row.
+    assert summary2.pending_change_ids == []
+
+    async with session_factory() as session:
+        all_changes = (await session.exec(select(PendingChange))).all()
+        assert len(all_changes) == 1
+        assert all_changes[0].id == change_id
+        assert all_changes[0].status == ChangeStatus.approved  # still queued, untouched by the rescan
 
     await engine.dispose()
 

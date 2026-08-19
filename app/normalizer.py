@@ -14,13 +14,14 @@ app/rules.py::apply_overrides already reads.
 
 from __future__ import annotations
 
-import re
+import dataclasses
 from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
 from app.analyzer import MediaStream
 from app.languages import iso_codes_for_language_name, language_name_for_code
+from app.text_patterns import matches_any_pattern
 
 _TRACK_TYPE_LETTER = {"video": "v", "audio": "a", "subtitle": "s"}
 
@@ -50,7 +51,8 @@ class NormalizerConfig(BaseModel):
     # Same title-text-fallback mechanism as RuleConfig's commentary/
     # hearing-impaired patterns (app/rules.py) — a separate config instance
     # by design, so the two systems stay decoupled, even though the
-    # matching mechanism (_matches_pattern below) is identical in shape.
+    # matching mechanism (app/text_patterns.py::matches_any_pattern) is
+    # identical in shape.
     commentary_title_patterns: list[str] = Field(default_factory=lambda: ["commentary"])
     hearing_impaired_title_patterns: list[str] = Field(default_factory=lambda: ["sdh", "hearing.impaired"])
     cc_title_patterns: list[str] = Field(default_factory=lambda: ["closed.caption"])
@@ -73,18 +75,6 @@ class TrackNormalization:
     reason: str
 
 
-def _matches_pattern(title: str | None, patterns: list[str]) -> str | None:
-    if not title:
-        return None
-    for pattern in patterns:
-        try:
-            if re.search(pattern, title, re.IGNORECASE):
-                return pattern
-        except re.error:
-            continue
-    return None
-
-
 def _build_title(language_name: str, attributes: list[str], style: str) -> str:
     if not attributes:
         return language_name
@@ -94,11 +84,11 @@ def _build_title(language_name: str, attributes: list[str], style: str) -> str:
 
 def _audio_attributes(stream: MediaStream, config: NormalizerConfig) -> list[str]:
     attributes = []
-    if stream.is_commentary or _matches_pattern(stream.title, config.commentary_title_patterns):
+    if stream.is_commentary or matches_any_pattern(stream.title, config.commentary_title_patterns):
         attributes.append("Commentary")
-    if _matches_pattern(stream.title, config.original_title_patterns):
+    if matches_any_pattern(stream.title, config.original_title_patterns):
         attributes.append("Original")
-    if _matches_pattern(stream.title, config.dubbed_title_patterns):
+    if matches_any_pattern(stream.title, config.dubbed_title_patterns):
         attributes.append("Dubbed")
     return attributes
 
@@ -106,13 +96,13 @@ def _audio_attributes(stream: MediaStream, config: NormalizerConfig) -> list[str
 def _subtitle_attributes(stream: MediaStream, config: NormalizerConfig) -> list[str]:
     attributes = []
     is_forced = stream.is_forced or (
-        config.forced_equivalents_enabled and bool(_matches_pattern(stream.title, config.forced_equivalent_patterns))
+        config.forced_equivalents_enabled and bool(matches_any_pattern(stream.title, config.forced_equivalent_patterns))
     )
     if is_forced:
         attributes.append("Forced")
-    if stream.is_hearing_impaired or _matches_pattern(stream.title, config.hearing_impaired_title_patterns):
+    if stream.is_hearing_impaired or matches_any_pattern(stream.title, config.hearing_impaired_title_patterns):
         attributes.append("SDH")
-    elif _matches_pattern(stream.title, config.cc_title_patterns):
+    elif matches_any_pattern(stream.title, config.cc_title_patterns):
         # SDH takes priority when a track somehow matches both — they're
         # rendered as mutually exclusive labels, never combined.
         attributes.append("CC")
@@ -227,9 +217,13 @@ def apply_overrides(normalizations: list[TrackNormalization], skip_indices: list
         return normalizations
     skip_set = set(skip_indices)
     return [
-        TrackNormalization(
-            n.index, n.codec_type, n.track_selector, n.old_title, n.old_title or "", n.old_language, n.old_language,
-            n.old_default, None, False, "skipped by user override",
+        dataclasses.replace(
+            n,
+            new_title=n.old_title or "",
+            new_language=n.old_language,
+            new_default=None,
+            changed=False,
+            reason="skipped by user override",
         )
         if n.index in skip_set
         else n
