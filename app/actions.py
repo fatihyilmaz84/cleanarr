@@ -161,6 +161,8 @@ def submit_scan_job(
             f"{summary.files_with_pending_changes} need changes, "
             f"{len(summary.errors)} error(s)"
         )
+        if summary.bytes_reclaimed_from_temp_files:
+            job.message += f", cleared {summary.bytes_reclaimed_from_temp_files / 1e9:.2f}GB of leftover remux temp files"
         if summary.stopped_early:
             job.message += " — stopped early, hit the schedule's time window"
 

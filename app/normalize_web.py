@@ -12,6 +12,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.actions import submit_normalize_apply_job, submit_normalize_scan_job
 from app.deps import get_session
+from app.languages import iso_codes_for_language_name
 from app.models import ChangeStatus, NormalizationChange
 from app.normalizer import NormalizerConfig
 from app.queries import list_normalize_items, normalize_stats
@@ -68,6 +69,27 @@ async def ui_delete_normalizer_preset(preset_id: str, session: AsyncSession = De
     return _redirect("/normalize/settings", "Preset deleted — anything using it falls back to Default settings.")
 
 
+def _unmatched_language_note(config: NormalizerConfig) -> str:
+    """Warn about a preferred language nothing will ever match.
+
+    The box is free text, and a value that resolves to no ISO code just
+    means auto-default quietly never fires — the setting saves, looks
+    accepted, and does nothing. Both the English name and the endonym
+    resolve, so this only fires on an actual typo.
+    """
+    unmatched = [
+        f"'{value}'"
+        for value in (config.preferred_audio_language, config.preferred_subtitle_language)
+        if value.strip() and not iso_codes_for_language_name(value)
+    ]
+    if not unmatched:
+        return ""
+    return (
+        f" But {' and '.join(unmatched)} matches no language, so auto-default won't do anything —"
+        " try the English name or the language's own name."
+    )
+
+
 @normalize_router.post("/normalize/settings")
 async def ui_save_normalize_settings(request: Request, session: AsyncSession = Depends(get_session)):
     form = await request.form()
@@ -88,6 +110,10 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
         original_title_patterns=_split_csv(form.get("original_title_patterns", "")),
         dubbed_title_patterns=_split_csv(form.get("dubbed_title_patterns", "")),
     )
+    # A preferred language that matches nothing disables auto-default
+    # silently — the setting looks accepted and simply never fires. Say so.
+    note = _unmatched_language_note(config)
+
     preset_id = request.query_params.get("preset") or None
     if preset_id:
         presets = await get_normalizer_presets(session)
@@ -95,11 +121,11 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
             if preset.id == preset_id:
                 preset.config = config
                 await set_normalizer_presets(session, presets)
-                return _redirect(f"/normalize/settings?preset={preset_id}", f"Preset '{preset.name}' saved.")
+                return _redirect(f"/normalize/settings?preset={preset_id}", f"Preset '{preset.name}' saved.{note}")
         return _redirect("/normalize/settings", "That preset no longer exists — nothing saved.")
 
     await set_normalizer_config(session, config)
-    return _redirect("/normalize/settings", "Normalizer settings saved.")
+    return _redirect("/normalize/settings", f"Normalizer settings saved.{note}")
 
 
 @normalize_router.get("/normalize")

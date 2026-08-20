@@ -19,7 +19,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.analyzer import AnalyzerError, MediaProbe, MediaStream, probe_file
-from app.arr_client import ArrClient, ArrMediaInfo, normalize_path
+from app.arr_client import ArrClient, ArrMediaInfo, display_title_for, normalize_path
 from app.models import ChangeStatus, LibraryType, MediaFile, NormalizationChange, PendingChange, StreamRecord
 from app.rules import RuleConfig, decide
 from app.settings_store import MediaPath
@@ -37,6 +37,10 @@ MEDIA_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".ts"}
 # between files today. It is NOT a unit of safety — scanning never touches
 # a file on disk, it only writes proposals to the database.
 COMMIT_BATCH_SIZE = 100
+
+# app/remux.py's temp-file prefix, repeated here rather than imported so the
+# scanner doesn't depend on the remux executor just to recognise its litter.
+TEMP_FILE_PREFIX = ".cleanarr.tmp."
 
 
 def _now():
@@ -60,6 +64,9 @@ class ScanSummary:
     # True if a `deadline` (see run_scan) was hit before every file could be
     # scanned — not an error, just means the rest is left for next time.
     stopped_early: bool = False
+    # Space recovered from `.cleanarr.tmp.` fragments left by a remux that
+    # was killed outright — see _remove_orphaned_temp_files.
+    bytes_reclaimed_from_temp_files: int = 0
 
 
 def _iter_media_files(root: Path):
@@ -136,6 +143,7 @@ async def run_scan(
     summary.files_total = len(work_items)
 
     await _forget_hidden_files(session, media_paths)
+    summary.bytes_reclaimed_from_temp_files = _remove_orphaned_temp_files(media_paths)
 
     for file_path, library_type in work_items:
         # Checked between files, never mid-file — a probe is read-only and
@@ -167,6 +175,39 @@ async def run_scan(
     return summary
 
 
+def _remove_orphaned_temp_files(media_paths: list[MediaPath]) -> int:
+    """Delete leftover `.cleanarr.tmp.` fragments, returning bytes reclaimed.
+
+    app/remux.py removes its temp file in a `finally`, but a process killed
+    outright — the container stopped mid-remux — never runs it, and the
+    fragment then sits in the library forever. One real 99%-full array was
+    holding a 0.44GB piece of a half-remuxed film this way, with nothing that
+    would ever notice it.
+
+    Safe on two counts. Jobs run one at a time on a single worker
+    (app/jobs.py), so no remux can be in flight while a scan is walking, and
+    any such file is therefore an orphan rather than one in use. And a
+    fragment is only removed when the real file it was derived from is
+    present, so this can never delete the only copy of anything.
+    """
+    reclaimed = 0
+    for mp in media_paths:
+        root = Path(mp.path)
+        if not root.exists():
+            continue
+        for leftover in root.rglob(f"{TEMP_FILE_PREFIX}*"):
+            original = leftover.with_name(leftover.name[len(TEMP_FILE_PREFIX) :])
+            if not leftover.is_file() or not original.exists():
+                continue
+            try:
+                size = leftover.stat().st_size
+                leftover.unlink()
+            except OSError:
+                continue
+            reclaimed += size
+    return reclaimed
+
+
 async def _forget_hidden_files(session: AsyncSession, media_paths: list[MediaPath]) -> None:
     """Drop rows for files the walk now skips but a previous version tracked.
 
@@ -181,14 +222,18 @@ async def _forget_hidden_files(session: AsyncSession, media_paths: list[MediaPat
     library's records over a mount hiccup would be far worse than a stale
     row.
     """
-    roots = [str(Path(mp.path)) for mp in media_paths]
+    roots = [Path(mp.path) for mp in media_paths]
     if not roots:
         return
 
     candidates = (await session.exec(select(MediaFile))).all()
     for media_file in candidates:
         path = Path(media_file.path)
-        root = next((r for r in roots if media_file.path.startswith(r)), None)
+        # is_relative_to, not a string prefix: with "/movies" and
+        # "/movies-4k" both configured, "/movies-4k/x.mkv" startswith
+        # "/movies", and relative_to would then raise and take the whole
+        # scan down before it walked a single file.
+        root = next((r for r in roots if path.is_relative_to(r)), None)
         if root is None:
             continue
         if not any(part.startswith(".") for part in path.relative_to(root).parts):
@@ -300,9 +345,7 @@ async def _scan_one_file(
 
     arr_info = arr_index.get(normalize_path(path_str))
     if arr_info:
-        media_file.display_title = (
-            arr_info.title if arr_info.kind == "movie" else f"{arr_info.series_title} - {arr_info.title}"
-        )
+        media_file.display_title = display_title_for(arr_info) or None
         media_file.poster_url = arr_info.poster_url
         media_file.arr_id = arr_info.arr_id
         media_file.arr_kind = arr_info.kind

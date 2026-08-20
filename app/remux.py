@@ -59,7 +59,9 @@ class RemuxResult:
 def _tmp_path_for(source: Path) -> Path:
     # Same directory as source => same filesystem => atomic os.replace works,
     # and the hidden dot-prefix keeps it out of *arr/Jellyfin library scans
-    # while it's being written.
+    # while it's being written. The prefix is also what app/scanner.py looks
+    # for when clearing up after a remux that was killed before its `finally`
+    # could run — keep the two in step.
     return source.parent / f".cleanarr.tmp.{source.name}"
 
 

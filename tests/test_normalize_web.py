@@ -298,3 +298,48 @@ def test_describe_track_summarises_format_and_layout():
     assert describe_track(make_stream(3, "subtitle", codec_name="subrip")) == "SRT"
     # Channel count is an audio concept — never claimed for a subtitle.
     assert describe_track(make_stream(4, "subtitle", codec_name="hdmv_pgs_subtitle", channels=6)) == "PGS"
+
+
+def test_a_language_can_be_named_either_way():
+    """Every track title the app shows now reads "Nederlands", so typing that
+    into the preferred-language box is the natural thing to do. It used to
+    match nothing and silently disable auto-default.
+    """
+    from app.languages import iso_codes_for_language_name as codes
+
+    assert codes("Nederlands") == codes("Dutch")
+    assert codes("Deutsch") == codes("German")
+    assert codes("Türkçe") == codes("Turkish")
+    assert codes("日本語") == codes("Japanese")
+    assert codes("nederlands") == codes("Dutch")  # case-insensitive both ways
+
+
+def test_an_endonym_actually_drives_auto_default():
+    from app.normalizer import NormalizerConfig, normalize_streams
+    from tests.fixtures import make_stream
+
+    streams = [
+        make_stream(1, "subtitle", codec_name="subrip", language="dut"),
+        make_stream(2, "subtitle", codec_name="subrip", language="eng", is_default=True),
+    ]
+    config = NormalizerConfig(auto_default_subtitle=True, preferred_subtitle_language="Nederlands")
+
+    results = {n.new_title: n.new_default for n in normalize_streams(streams, config)}
+
+    assert results["Nederlands"] is True
+    assert results["English"] is False
+
+
+def test_a_preferred_language_that_matches_nothing_is_called_out(client: TestClient):
+    # It saves and looks accepted, then quietly never fires.
+    from app.normalize_web import _unmatched_language_note
+    from app.normalizer import NormalizerConfig
+
+    assert _unmatched_language_note(NormalizerConfig(preferred_audio_language="Nederlands")) == ""
+    assert _unmatched_language_note(NormalizerConfig()) == ""
+
+    note = _unmatched_language_note(NormalizerConfig(preferred_audio_language="Nederlandse"))
+    assert "matches no language" in note
+
+    resp = client.post("/normalize/settings", data={"naming_style": "dash", "preferred_audio_language": "Klingon"})
+    assert "matches no language" in resp.text

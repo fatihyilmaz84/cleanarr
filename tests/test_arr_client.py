@@ -189,3 +189,89 @@ async def test_test_connection_says_what_is_missing_when_unconfigured():
     result = await ArrClient().test_connection("sonarr")
     assert result.ok is False
     assert result.detail == "No URL configured"
+
+
+# --- episode labelling -------------------------------------------------
+
+
+def test_episode_label_uses_the_episode_number_and_name():
+    from app.arr_client import _episode_label
+
+    assert _episode_label([{"seasonNumber": 1, "episodeNumber": 1, "title": "Kassa"}]) == "S01E01 - Kassa"
+
+
+def test_episode_label_covers_a_multi_episode_file_as_a_range():
+    from app.arr_client import _episode_label
+
+    episodes = [
+        {"seasonNumber": 2, "episodeNumber": 6, "title": "Chapter 14"},
+        {"seasonNumber": 2, "episodeNumber": 7, "title": "Chapter 15"},
+    ]
+    assert _episode_label(episodes) == "S02E06-E07 - Chapter 14"
+
+
+def test_episode_label_is_unknown_without_numbering():
+    from app.arr_client import _episode_label
+
+    assert _episode_label([]) is None
+    assert _episode_label([{"title": "Kassa"}]) is None
+
+
+def test_display_title_does_not_repeat_the_series_name():
+    """Sonarr often has no sceneName, and the old fallback made `title` the
+    series name — which was then prefixed with the series name again,
+    rendering "Andor - Andor" on 35% of one real library's episodes.
+    """
+    from app.arr_client import ArrMediaInfo, display_title_for
+
+    info = ArrMediaInfo(kind="episode", title="Andor", series_title="Andor")
+    assert display_title_for(info) == "Andor"
+
+    info = ArrMediaInfo(kind="episode", title="", series_title="Andor")
+    assert display_title_for(info) == "Andor"
+
+    info = ArrMediaInfo(kind="episode", title="S01E01 - Kassa", series_title="Andor")
+    assert display_title_for(info) == "Andor - S01E01 - Kassa"
+
+    assert display_title_for(ArrMediaInfo(kind="movie", title="Ocean's Twelve")) == "Ocean's Twelve"
+
+
+@pytest.mark.asyncio
+async def test_series_index_labels_files_with_their_episode():
+    def handler(request):
+        if request.url.path == "/api/v3/series":
+            return httpx.Response(200, json=SONARR_SERIES)
+        if request.url.path == "/api/v3/episodefile":
+            return httpx.Response(200, json=[{"id": 100, "seasonNumber": 1,
+                                              "path": "/data/tvshows/Example Show/Season 01/ep1.mkv"}])
+        if request.url.path == "/api/v3/episode":
+            return httpx.Response(200, json=[{"episodeFileId": 100, "seasonNumber": 1,
+                                              "episodeNumber": 4, "title": "The Reckoning"}])
+        return httpx.Response(404)
+
+    client = ArrClient(sonarr_url="http://sonarr:8989", sonarr_api_key="k",
+                       http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    index, warnings = await client.build_series_index()
+
+    info = index["/data/tvshows/Example Show/Season 01/ep1.mkv"]
+    assert info.title == "S01E04 - The Reckoning"
+    assert info.episode_number == 4
+    assert warnings == []
+
+
+@pytest.mark.asyncio
+async def test_a_failing_episode_lookup_only_costs_the_names():
+    # The files are already in hand; enrichment degrades rather than fails.
+    def handler(request):
+        if request.url.path == "/api/v3/series":
+            return httpx.Response(200, json=SONARR_SERIES)
+        if request.url.path == "/api/v3/episodefile":
+            return httpx.Response(200, json=SONARR_EPISODE_FILES)
+        return httpx.Response(500)
+
+    client = ArrClient(sonarr_url="http://sonarr:8989", sonarr_api_key="k",
+                       http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    index, warnings = await client.build_series_index()
+
+    assert len(index) == 1
+    assert warnings == []

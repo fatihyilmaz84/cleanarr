@@ -54,6 +54,44 @@ def normalize_path(path: str) -> str:
     return posixpath.normpath(path.replace("\\", "/"))
 
 
+def display_title_for(info: "ArrMediaInfo") -> str:
+    """How a file should be labelled in the UI.
+
+    Episodes are "Series - S01E01 - Kassa". The parts are joined only when
+    they're actually distinct: with nothing to say about the episode this
+    used to render f"{series} - {title}" where title had already fallen back
+    to the series name, giving "Andor - Andor" on 35% of one real library's
+    episodes.
+    """
+    if info.kind == "movie":
+        return info.title
+    parts = [info.series_title or "", info.title or ""]
+    kept = [p for p in parts if p]
+    if len(kept) == 2 and kept[0] == kept[1]:
+        kept = kept[:1]
+    return " - ".join(kept)
+
+
+def _episode_label(episodes: list[dict]) -> str | None:
+    """"S01E01 - Kassa" for one episode, "S01E01-E02 - Title" for a file
+    covering several. None when Sonarr can't say which episode it is.
+    """
+    numbered = sorted(
+        (e for e in episodes if e.get("seasonNumber") is not None and e.get("episodeNumber") is not None),
+        key=lambda e: (e["seasonNumber"], e["episodeNumber"]),
+    )
+    if not numbered:
+        return None
+
+    season = numbered[0]["seasonNumber"]
+    code = f"S{season:02d}E{numbered[0]['episodeNumber']:02d}"
+    if len(numbered) > 1:
+        code += f"-E{numbered[-1]['episodeNumber']:02d}"
+
+    title = numbered[0].get("title")
+    return f"{code} - {title}" if title else code
+
+
 def _poster_url(images: list[dict] | None) -> str | None:
     for image in images or []:
         if image.get("coverType") == "poster":
@@ -159,13 +197,13 @@ class ArrClient:
         except (httpx.HTTPError, ValueError) as e:
             return {}, [f"Sonarr: failed to fetch series list ({e})"]
 
-        # One /api/v3/episodefile request per series — sequentially this is
-        # a full scan-blocking round trip per show. Fetch them concurrently
-        # (capped, so a library with hundreds of shows doesn't fire hundreds
-        # of requests at Sonarr at once).
+        # Two requests per series: the files, and the episodes that name
+        # them. Sequentially that's a scan-blocking round trip per show, so
+        # they go concurrently — capped, so a library with hundreds of shows
+        # doesn't fire hundreds of requests at Sonarr at once.
         semaphore = asyncio.Semaphore(8)
 
-        async def fetch_episode_files(series: dict) -> tuple[dict, list[dict] | None, str | None]:
+        async def fetch_series_data(series: dict) -> tuple[dict, list[dict] | None, list[dict], str | None]:
             series_title = series.get("title", "Unknown")
             async with semaphore:
                 try:
@@ -177,17 +215,35 @@ class ArrClient:
                         client=client,
                     )
                 except (httpx.HTTPError, ValueError) as e:
-                    return series, None, f"Sonarr: failed to fetch episode files for '{series_title}' ({e})"
-            return series, episode_files, None
+                    return series, None, [], f"Sonarr: failed to fetch episode files for '{series_title}' ({e})"
+                try:
+                    episodes = await self._get(
+                        self.sonarr_url,
+                        self.sonarr_api_key,
+                        "/api/v3/episode",
+                        params={"seriesId": series.get("id")},
+                        client=client,
+                    )
+                except (httpx.HTTPError, ValueError):
+                    # Only costs the episode names; the files themselves are
+                    # already in hand, so enrichment degrades rather than fails.
+                    episodes = []
+            return series, episode_files, episodes, None
 
-        results = await asyncio.gather(*(fetch_episode_files(s) for s in series_list))
+        results = await asyncio.gather(*(fetch_series_data(s) for s in series_list))
 
         warnings: list[str] = []
         index: dict[str, ArrMediaInfo] = {}
-        for series, episode_files, warning in results:
+        for series, episode_files, episodes, warning in results:
             if warning:
                 warnings.append(warning)
                 continue
+
+            episodes_by_file: dict[int, list[dict]] = {}
+            for episode in episodes:
+                file_id = episode.get("episodeFileId")
+                if file_id:
+                    episodes_by_file.setdefault(file_id, []).append(episode)
 
             series_id = series.get("id")
             series_title = series.get("title", "Unknown")
@@ -198,11 +254,19 @@ class ArrClient:
                 file_path = ep_file.get("path")
                 if not file_path:
                     continue
+                own_episodes = episodes_by_file.get(ep_file.get("id"), [])
+                label = _episode_label(own_episodes)
+                numbers = [e.get("episodeNumber") for e in own_episodes if e.get("episodeNumber") is not None]
                 index[normalize_path(file_path)] = ArrMediaInfo(
                     kind="episode",
-                    title=ep_file.get("sceneName") or series_title,
+                    # The episode's own number and name where Sonarr knows
+                    # them. sceneName is the raw release string
+                    # ("Show.S01E02.1080p.WEB-DL.x264-GRP") and is often
+                    # absent entirely, so it's only a fallback.
+                    title=label or ep_file.get("sceneName") or "",
                     series_title=series_title,
                     season_number=ep_file.get("seasonNumber"),
+                    episode_number=min(numbers) if numbers else None,
                     poster_url=poster_url,
                     arr_id=series_id,
                     original_language=original_language,

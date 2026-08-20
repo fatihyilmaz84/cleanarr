@@ -280,7 +280,16 @@ async def propose_normalizations(
         # _dropped_indices_from_change's docstring.
         all_streams = [_stream_from_record(r) for r in records]
         dropped = _dropped_indices_from_change(pending_change_by_file.get(media_file.id))
-        detected = await _detect_missing_languages(session, media_file, records) if config.detect_subtitle_language else {}
+        detected = (
+            # Skipping the tracks already queued for removal: decoding one to
+            # work out a language for a track about to be deleted is pure
+            # waste, and apply_overrides discards the answer immediately below.
+            await _detect_missing_languages(
+                session, media_file, [r for r in records if r.stream_index not in dropped]
+            )
+            if config.detect_subtitle_language
+            else {}
+        )
         normalizations = normalize_streams(all_streams, config, detected_languages=detected)
         normalizations = apply_overrides(normalizations, sorted(dropped), reason=SKIPPED_PENDING_REMOVAL)
         changed = [n for n in normalizations if n.changed]

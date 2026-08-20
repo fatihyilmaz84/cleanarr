@@ -438,3 +438,88 @@ async def test_a_missing_file_is_not_forgotten_just_for_being_absent(tmp_path, m
         assert await session.get(MediaFile, gone_id) is not None  # kept
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_overlapping_media_roots_do_not_break_the_scan(tmp_path, monkeypatch):
+    """"/movies" and "/movies-4k" is an ordinary setup, and a raw string
+    prefix match puts the second under the first — after which working out
+    the relative path raises and takes the whole scan down before it walks a
+    single file.
+    """
+    from app.models import LibraryType, MediaFile
+
+    movies = tmp_path / "movies"
+    movies_4k = tmp_path / "movies-4k"
+    for d in (movies, movies_4k):
+        d.mkdir()
+        (d / "Film.mkv").write_bytes(b"x" * 1000)
+
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        session.add(MediaFile(path=str(movies_4k / "Film.mkv"), library_type=LibraryType.movie))
+        await session.commit()
+
+    paths = [
+        MediaPath(path=str(movies), library_type="movie"),
+        MediaPath(path=str(movies_4k), library_type="movie"),
+    ]
+    async with session_factory() as session:
+        summary = await run_scan(session, paths, RuleConfig())
+
+    assert summary.files_total == 2
+    assert summary.errors == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_leftover_remux_fragment_is_cleaned_up(tmp_path, media_dir, monkeypatch):
+    """app/remux.py removes its temp file in a `finally`, which never runs if
+    the process is killed outright. The fragment then sits in the library
+    forever with nothing to notice it — one real 99%-full array was holding
+    0.44GB of a half-remuxed film this way.
+    """
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+    original = media_dir / "Movie.mkv"
+    leftover = media_dir / ".cleanarr.tmp.Movie.mkv"
+    leftover.write_bytes(b"x" * 4096)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        summary = await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    assert not leftover.exists()
+    assert original.exists()  # untouched
+    assert summary.bytes_reclaimed_from_temp_files == 4096
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_fragment_is_kept_when_it_is_the_only_copy(tmp_path, media_dir, monkeypatch):
+    """If the file it came from is gone, the fragment may be all that's left
+    — deleting it could destroy the only copy of something.
+    """
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+    orphan = media_dir / ".cleanarr.tmp.Vanished.mkv"
+    orphan.write_bytes(b"x" * 4096)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        summary = await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    assert orphan.exists()
+    assert summary.bytes_reclaimed_from_temp_files == 0
+
+    await engine.dispose()

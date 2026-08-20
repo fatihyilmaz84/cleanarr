@@ -84,7 +84,8 @@ def iso_codes_for_language_name(name: str | None) -> frozenset[str]:
     """
     if not name:
         return frozenset()
-    return _LANGUAGE_NAME_TO_ISO639_2.get(name.strip().lower(), frozenset())
+    key = name.strip().lower()
+    return _LANGUAGE_NAME_TO_ISO639_2.get(key) or _ENDONYM_TO_ISO639_2.get(key, frozenset())
 
 
 # (display name, primary ISO 639-2 code) — one entry per distinct language,
@@ -237,6 +238,18 @@ def _build_code_to_name() -> dict[str, str]:
         for code in iso_codes_for_language_name(name):
             mapping.setdefault(code, name)
     return mapping
+
+
+# Endonyms resolve back to codes too, so a language can be named either way
+# wherever the app takes one. The normalizer's "preferred audio language"
+# box is the case that matters: every track title the app shows now reads
+# "Nederlands", so typing that is the natural thing to do, and it used to
+# match nothing at all and silently disable auto-default.
+_ENDONYM_TO_ISO639_2: dict[str, frozenset[str]] = {
+    endonym.strip().lower(): _LANGUAGE_NAME_TO_ISO639_2[name.strip().lower()]
+    for name, endonym in _ENDONYMS.items()
+    if name.strip().lower() in _LANGUAGE_NAME_TO_ISO639_2
+}
 
 
 def _build_code_to_endonym() -> dict[str, str]:
