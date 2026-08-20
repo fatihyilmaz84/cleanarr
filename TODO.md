@@ -169,8 +169,22 @@ schedule.
   runs them sequentially, never concurrently; normalize is submitted second
   on purpose, so it sees whatever the scan just refreshed and skips tracks
   the scan just proposed dropping.
-- Still open: editing an existing schedule (today: delete + re-add), and
-  per-schedule media-path scoping ("clean only /movies on Sundays").
+- [x] Editing a saved schedule reuses the same one-form-two-targets shape
+      as the preset pages: `/schedule` adds, `/schedule?edit=<id>` edits
+      that one in place. Both modes share one parser and one set of
+      prefilled inputs (seeded from a default `Schedule()` when adding), so
+      an edit can't drift from what an add accepts. The edit keeps the
+      schedule's `id` and its enabled/disabled state — the id is what the
+      toggle/delete buttons address and what the scheduler's
+      fired-this-minute bookkeeping keys off, so a re-created one could
+      make an edit mid-window re-fire a schedule that had already run.
+- Fixed in passing: `_redirect` appended `?msg=` unconditionally, so a
+  redirect back to a path that already had a query string (`?preset=`,
+  now `?edit=`) folded the message into the preceding param's value —
+  losing both the message and the param. The preset pages' "Preset saved"
+  redirect had been silently bouncing to Default because of it.
+- Still open: per-schedule media-path scoping ("clean only /movies on
+  Sundays").
 
 ## 4. Fix timezone handling — done ✅
 

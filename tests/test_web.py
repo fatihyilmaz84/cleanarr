@@ -356,6 +356,113 @@ def test_schedule_window_spanning_midnight_saved_and_displayed_correctly(client:
     assert schedule.end_hour == 2
 
 
+def _add_schedule(client: TestClient, **overrides) -> str:
+    data = {"hour": "4", "minute": "0", "run_clean": "on"}
+    data.update(overrides)
+    client.post("/schedule", data=data)
+    return asyncio.run(_get_schedule(client.app.state.session_factory)).id
+
+
+def test_schedule_edit_form_is_prefilled_with_the_saved_schedule(client: TestClient):
+    schedule_id = _add_schedule(
+        client,
+        label="Nightly cleanup",
+        hour="23",
+        minute="15",
+        end_hour="2",
+        end_minute="30",
+        days_of_week=["0", "2"],
+        auto_apply="on",
+        run_normalize="on",
+    )
+
+    page = client.get(f"/schedule?edit={schedule_id}").text
+    assert "Editing: Nightly cleanup" in page
+    assert "Save Changes" in page
+    assert f'action="/schedule?edit={schedule_id}"' in page
+    assert 'name="hour" min="0" max="23" value="23"' in page
+    assert 'name="minute" min="0" max="59" value="15"' in page
+    assert 'name="end_hour" min="0" max="23" value="2"' in page
+    assert 'name="end_minute" min="0" max="59" value="30"' in page
+    # Mon/Wed checked, the rest not; the opt-ins reflect what was saved.
+    assert page.count('name="days_of_week"') == 7
+    assert page.count('name="days_of_week" value="0" checked') == 1
+    assert page.count('name="days_of_week" value="1" checked') == 0
+    assert 'name="auto_apply" checked' in page
+    assert 'name="run_normalize" checked' in page
+    assert 'name="apply_queued" checked' not in page
+
+
+def test_schedule_edit_updates_in_place_keeping_id_and_enabled_state(client: TestClient):
+    schedule_id = _add_schedule(client, label="Nightly", auto_apply="on")
+    client.post(f"/schedule/{schedule_id}/toggle")  # disable it before editing
+
+    resp = client.post(
+        f"/schedule?edit={schedule_id}",
+        data={"label": "Weekly deep clean", "hour": "5", "minute": "45", "days_of_week": ["6"], "run_clean": "on"},
+    )
+    assert "Schedule updated" in resp.text
+
+    async def _all():
+        async with client.app.state.session_factory() as session:
+            return await get_schedules(session)
+
+    schedules = asyncio.run(_all())
+    assert len(schedules) == 1  # edited, not appended as a second one
+    saved = schedules[0]
+    assert saved.id == schedule_id  # the id the toggle/delete buttons address
+    assert saved.enabled is False  # editing is not a way to silently re-enable
+    assert (saved.label, saved.hour, saved.minute, saved.days_of_week) == ("Weekly deep clean", 5, 45, [6])
+    assert saved.auto_apply is False  # an unchecked box clears it, as on add
+
+
+def test_schedule_edit_can_clear_the_end_window(client: TestClient):
+    schedule_id = _add_schedule(client, end_hour="6", end_minute="0")
+    client.post(f"/schedule?edit={schedule_id}", data={"hour": "4", "minute": "0", "run_clean": "on"})
+
+    saved = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert (saved.end_hour, saved.end_minute) == (None, None)
+
+
+def test_schedule_edit_of_a_deleted_schedule_saves_nothing(client: TestClient):
+    # Deleted in another tab between opening the edit form and submitting it —
+    # the edits must not come back as a brand-new schedule.
+    schedule_id = _add_schedule(client)
+    client.post(f"/schedule/{schedule_id}/delete")
+
+    resp = client.post(f"/schedule?edit={schedule_id}", data={"hour": "9", "minute": "0", "run_clean": "on"})
+    assert "no longer exists" in resp.text
+    assert "No schedules yet" in resp.text
+
+
+def test_schedule_edit_rejected_by_validation_returns_to_the_edit_form(client: TestClient):
+    schedule_id = _add_schedule(client, label="Nightly")
+    # neither Clean nor Normalize checked — rejected, and the user lands back
+    # on the edit form rather than on a blank add form.
+    resp = client.post(f"/schedule?edit={schedule_id}", data={"hour": "4", "minute": "0"})
+    assert "Pick at least one of Clean or Normalize" in resp.text
+    assert "Editing: Nightly" in resp.text
+
+    saved = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert saved.run_clean is True  # untouched
+
+
+def test_schedule_edit_link_for_an_unknown_id_falls_back_to_the_add_form(client: TestClient):
+    _add_schedule(client)
+    page = client.get("/schedule?edit=nope").text
+    assert "Add a schedule" in page
+    assert "Add Schedule" in page
+
+
+def test_redirect_message_does_not_clobber_an_existing_query_param(client: TestClient):
+    # _redirect appends msg= to a path that may already carry a query string
+    # (the ?edit=/?preset= edit forms) — with a "?" instead of an "&" the
+    # message would be swallowed into the preceding param's value.
+    schedule_id = _add_schedule(client, label="Nightly")
+    resp = client.post(f"/schedule?edit={schedule_id}", data={"hour": "4", "minute": "0"})
+    assert str(resp.url).endswith(f"/schedule?edit={schedule_id}&msg=Pick%20at%20least%20one%20of%20Clean%20or%20Normalize%20%E2%80%94%20nothing%20saved.")
+
+
 def test_queue_run_and_remove(client: TestClient, media_dir: Path):
     client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
     client.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})

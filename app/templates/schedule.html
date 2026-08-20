@@ -2,28 +2,35 @@
 {% block title %}Schedule — Cleanarr{% endblock %}
 {% block page_title %}Schedule{% endblock %}
 {% block content %}
-<div class="glass-panel rounded-lg p-6 max-w-2xl">
-  <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Add a schedule</h3>
-  <form method="post" action="/schedule" class="space-y-4">
+<div id="schedule-form" class="glass-panel rounded-lg p-6 max-w-2xl {% if editing %}ring-1 ring-primary/40{% endif %}">
+  <div class="flex items-center justify-between mb-4 border-b border-white/10 pb-2">
+    <h3 class="font-label-caps text-label-caps text-on-surface-variant">
+      {% if editing %}Editing: {{ editing.label or "Schedule" }}{% else %}Add a schedule{% endif %}
+    </h3>
+    {% if editing %}
+    <a href="/schedule" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface px-3 py-1.5 rounded-DEFAULT border border-white/10 hover:bg-white/5 transition-colors">Cancel</a>
+    {% endif %}
+  </div>
+  <form method="post" action="{{ form_action }}" class="space-y-4">
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Label (optional)</label>
-      <input name="label" placeholder="e.g. Nightly cleanup" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+      <input name="label" value="{{ form_schedule.label }}" placeholder="e.g. Nightly cleanup" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
     </div>
     <div class="flex flex-wrap items-end gap-4">
       <div>
         <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Start ({{ display_timezone }})</label>
         <div class="flex items-center gap-1">
-          <input type="number" name="hour" min="0" max="23" value="4" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <input type="number" name="hour" min="0" max="23" value="{{ form_schedule.hour }}" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
           <span class="text-on-surface-variant">:</span>
-          <input type="number" name="minute" min="0" max="59" value="0" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <input type="number" name="minute" min="0" max="59" value="{{ form_schedule.minute }}" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
         </div>
       </div>
       <div>
         <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">End (optional)</label>
         <div class="flex items-center gap-1">
-          <input type="number" name="end_hour" min="0" max="23" placeholder="HH" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <input type="number" name="end_hour" min="0" max="23" value="{{ form_schedule.end_hour if form_schedule.end_hour is not none else '' }}" placeholder="HH" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
           <span class="text-on-surface-variant">:</span>
-          <input type="number" name="end_minute" min="0" max="59" placeholder="MM" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
+          <input type="number" name="end_minute" min="0" max="59" value="{{ form_schedule.end_minute if form_schedule.end_minute is not none else '' }}" placeholder="MM" class="w-16 bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
         </div>
       </div>
     </div>
@@ -33,7 +40,7 @@
       <div class="flex flex-wrap gap-3">
         {% for day in day_names %}
         <label class="flex items-center gap-1.5 font-body-md text-body-md text-on-surface">
-          <input type="checkbox" name="days_of_week" value="{{ loop.index0 }}" checked class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          <input type="checkbox" name="days_of_week" value="{{ loop.index0 }}" {% if loop.index0 in form_schedule.days_of_week %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
           {{ day }}
         </label>
         {% endfor %}
@@ -41,7 +48,7 @@
     </div>
     <div class="tech-border rounded-DEFAULT p-4 space-y-3">
       <label class="flex items-center gap-3 font-body-lg text-body-lg text-on-surface">
-        <input type="checkbox" name="run_clean" checked class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        <input type="checkbox" name="run_clean" {% if form_schedule.run_clean %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
         Clean — remove unwanted tracks
       </label>
       <div class="ml-7 space-y-3">
@@ -50,18 +57,18 @@
           <select name="rule_preset_id" class="bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
             <option value="">Default rules</option>
             {% for preset in rule_presets %}
-            <option value="{{ preset.id }}">{{ preset.name }}</option>
+            <option value="{{ preset.id }}" {% if preset.id == form_schedule.rule_preset_id %}selected{% endif %}>{{ preset.name }}</option>
             {% endfor %}
           </select>
           <p class="font-body-md text-[13px] text-on-surface-variant mt-1">Manage these under <a href="/rules" class="text-primary">Rules</a>. Whichever set proposes a change is also the set used when that change is later applied.</p>
         </div>
         <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-          <input type="checkbox" name="apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          <input type="checkbox" name="apply_queued" {% if form_schedule.apply_queued %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
           Also apply anything already sitting in the Queue
         </label>
         <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">Safe on its own — these are changes you already reviewed and approved, this just runs them on a schedule instead of a manual "Run Queue" click.</p>
         <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-          <input type="checkbox" name="auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          <input type="checkbox" name="auto_apply" {% if form_schedule.auto_apply %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
           Also apply this scan's own findings automatically (no review)
         </label>
         <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">More aggressive — whatever this run's scan proposes gets applied with no human ever looking at it first. Off by default; leave it off unless you fully trust your Rules.</p>
@@ -70,7 +77,7 @@
 
     <div class="tech-border rounded-DEFAULT p-4 space-y-3">
       <label class="flex items-center gap-3 font-body-lg text-body-lg text-on-surface">
-        <input type="checkbox" name="run_normalize" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        <input type="checkbox" name="run_normalize" {% if form_schedule.run_normalize %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
         Normalize — rename/retag tracks
       </label>
       <div class="ml-7 space-y-3">
@@ -79,23 +86,23 @@
           <select name="normalizer_preset_id" class="bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
             <option value="">Default settings</option>
             {% for preset in normalizer_presets %}
-            <option value="{{ preset.id }}">{{ preset.name }}</option>
+            <option value="{{ preset.id }}" {% if preset.id == form_schedule.normalizer_preset_id %}selected{% endif %}>{{ preset.name }}</option>
             {% endfor %}
           </select>
           <p class="font-body-md text-[13px] text-on-surface-variant mt-1">Manage these under <a href="/normalize/settings" class="text-primary">Normalize Settings</a>. Runs after the clean pass, so it sees whatever that just found and skips tracks queued for removal.</p>
         </div>
         <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-          <input type="checkbox" name="normalize_apply_queued" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          <input type="checkbox" name="normalize_apply_queued" {% if form_schedule.normalize_apply_queued %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
           Also apply anything already in the Normalize Queue
         </label>
         <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
-          <input type="checkbox" name="normalize_auto_apply" class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          <input type="checkbox" name="normalize_auto_apply" {% if form_schedule.normalize_auto_apply %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
           Also write this pass's own renames automatically (no review)
         </label>
         <p class="font-body-md text-[13px] text-on-surface-variant ml-7 -mt-1">Lower-stakes than the cleaner's equivalent — normalizing only rewrites container metadata via <span class="font-code-md">mkvpropedit</span>, it never removes a track or touches the media itself. Still off by default.</p>
       </div>
     </div>
-    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Add Schedule</button>
+    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">{{ "Save Changes" if editing else "Add Schedule" }}</button>
   </form>
 </div>
 
@@ -103,7 +110,7 @@
 <div class="space-y-3">
   {% for entry in schedules %}
   {% set s = entry.schedule %}
-  <div class="glass-panel rounded-lg p-4 flex items-center justify-between gap-4">
+  <div class="glass-panel rounded-lg p-4 flex items-center justify-between gap-4 {% if editing and editing.id == s.id %}ring-1 ring-primary/40{% endif %}">
     <div>
       <div class="flex items-center flex-wrap gap-2 mb-1">
         <span class="status-dot {{ 'status-healthy' if s.enabled else '' }}" style="{% if not s.enabled %}background-color:#555;{% endif %}"></span>
@@ -127,6 +134,7 @@
       </p>
     </div>
     <div class="flex gap-2 flex-shrink-0">
+      <a href="/schedule?edit={{ s.id }}#schedule-form" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">Edit</a>
       <form method="post" action="/schedule/{{ s.id }}/toggle">
         <button class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">{{ "Disable" if s.enabled else "Enable" }}</button>
       </form>

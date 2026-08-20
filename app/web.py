@@ -103,8 +103,12 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
 
 
 def _redirect(path: str, msg: str | None = None) -> RedirectResponse:
+    # `path` may already carry a query string (e.g. "/rules?preset=<id>"),
+    # in which case the message is a second param — appending a second "?"
+    # would fold "msg=..." into the *value* of the preceding param and both
+    # the message and that param would be lost.
     if msg:
-        path = f"{path}?msg={quote(msg)}"
+        path = f"{path}{'&' if '?' in path else '?'}msg={quote(msg)}"
     return RedirectResponse(path, status_code=303)
 
 
@@ -491,8 +495,14 @@ def _next_run(schedule: Schedule, now: datetime) -> datetime | None:
 
 @web_router.get("/schedule")
 async def ui_schedule(request: Request, session: AsyncSession = Depends(get_session)):
+    """One form, two targets — the same shape /rules already uses for
+    presets: with no `?edit=` the form adds a new schedule, with one it
+    edits that saved schedule in place. An unknown/deleted id falls back to
+    the add form rather than 404ing.
+    """
     ctx = await _base_context(request, session)
     schedules = await get_schedules(session)
+    editing = next((s for s in schedules if s.id == (request.query_params.get("edit") or None)), None)
     try:
         tz = ZoneInfo(ctx["display_timezone"])
     except ZoneInfoNotFoundError:
@@ -529,6 +539,13 @@ async def ui_schedule(request: Request, session: AsyncSession = Depends(get_sess
     ctx["day_names"] = DAY_NAMES
     ctx["rule_presets"] = rule_presets
     ctx["normalizer_presets"] = normalizer_presets
+    ctx["editing"] = editing
+    # A brand-new Schedule() carries exactly the defaults the add form used
+    # to hardcode (04:00, every day, clean on, everything else off), so a
+    # single set of prefilled inputs serves both modes with no duplicate
+    # "add form" / "edit form" markup to keep in sync.
+    ctx["form_schedule"] = editing or Schedule()
+    ctx["form_action"] = f"/schedule?edit={editing.id}" if editing else "/schedule"
     return templates.TemplateResponse(request, "schedule.html", ctx)
 
 
@@ -544,9 +561,17 @@ def _parse_optional_clock_field(form, hour_key: str, minute_key: str) -> tuple[i
     return int(hour_raw), int(minute_raw)
 
 
-@web_router.post("/schedule")
-async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_session)):
-    form = await request.form()
+def _parse_schedule_form(form) -> dict:
+    """The Schedule fields the add/edit form carries, as a dict — shared by
+    both modes so an edit can never drift from what an add accepts. Raises
+    ValueError carrying the user-facing message for input that can't be
+    saved; the caller turns that into a redirect.
+
+    Deliberately returns only the *form's* fields: `id` and `enabled` are
+    owned elsewhere (the schedule itself and the Enable/Disable button), so
+    leaving them out is what lets an edit merge cleanly onto the existing
+    schedule.
+    """
     try:
         hour = max(0, min(23, int(form.get("hour", 4))))
         minute = max(0, min(59, int(form.get("minute", 0))))
@@ -558,34 +583,69 @@ async def ui_add_schedule(request: Request, session: AsyncSession = Depends(get_
                 # zero-length window is meaningless — treat as "no window"
                 end_hour = end_minute = None
     except ValueError:
-        return _redirect("/schedule", "Invalid time — not saved.")
+        raise ValueError("Invalid time — not saved.") from None
     days_of_week = [int(d) for d in form.getlist("days_of_week")]
 
     run_clean = "run_clean" in form
     run_normalize = "run_normalize" in form
     if not run_clean and not run_normalize:
-        return _redirect("/schedule", "Pick at least one of Clean or Normalize — nothing saved.")
+        raise ValueError("Pick at least one of Clean or Normalize — nothing saved.")
+
+    return {
+        "label": form.get("label", "").strip(),
+        "hour": hour,
+        "minute": minute,
+        "end_hour": end_hour,
+        "end_minute": end_minute,
+        "days_of_week": days_of_week or list(range(7)),
+        "run_clean": run_clean,
+        # Empty string (the "Default" option) means no preset attached.
+        "rule_preset_id": form.get("rule_preset_id", "").strip() or None,
+        "auto_apply": "auto_apply" in form,
+        "apply_queued": "apply_queued" in form,
+        "run_normalize": run_normalize,
+        "normalizer_preset_id": form.get("normalizer_preset_id", "").strip() or None,
+        "normalize_auto_apply": "normalize_auto_apply" in form,
+        "normalize_apply_queued": "normalize_apply_queued" in form,
+    }
+
+
+@web_router.post("/schedule")
+async def ui_save_schedule(request: Request, session: AsyncSession = Depends(get_session)):
+    """Appends a new schedule, or — with `?edit=<id>` — overwrites that one
+    in place, keeping its position in the list.
+
+    An edit deliberately preserves the schedule's `id` and its
+    enabled/disabled state rather than replacing it with a fresh Schedule:
+    the id is what the Enable/Disable and Delete buttons address, what a
+    run's log line identifies, and what the scheduler's fired-this-minute
+    bookkeeping keys off (app/scheduler.py) — so a re-created id would make
+    an edit mid-window silently re-fire a schedule that had already run.
+    Enabling is its own separate control, so this form doesn't touch it.
+    """
+    form = await request.form()
+    edit_id = request.query_params.get("edit") or None
+    # A rejected edit goes back to the edit form, not to the add form —
+    # landing on a blank "add" after a typo would look like the schedule
+    # had been replaced by an empty one.
+    return_path = f"/schedule?edit={edit_id}" if edit_id else "/schedule"
+    try:
+        fields = _parse_schedule_form(form)
+    except ValueError as exc:
+        return _redirect(return_path, str(exc))
 
     schedules = await get_schedules(session)
-    schedules.append(
-        Schedule(
-            label=form.get("label", "").strip(),
-            hour=hour,
-            minute=minute,
-            end_hour=end_hour,
-            end_minute=end_minute,
-            days_of_week=days_of_week or list(range(7)),
-            run_clean=run_clean,
-            # Empty string (the "Default" option) means no preset attached.
-            rule_preset_id=form.get("rule_preset_id", "").strip() or None,
-            auto_apply="auto_apply" in form,
-            apply_queued="apply_queued" in form,
-            run_normalize=run_normalize,
-            normalizer_preset_id=form.get("normalizer_preset_id", "").strip() or None,
-            normalize_auto_apply="normalize_auto_apply" in form,
-            normalize_apply_queued="normalize_apply_queued" in form,
-        )
-    )
+    if edit_id:
+        for index, existing in enumerate(schedules):
+            if existing.id == edit_id:
+                schedules[index] = existing.model_copy(update=fields)
+                await set_schedules(session, schedules)
+                return _redirect("/schedule", "Schedule updated.")
+        # Deleted in another tab between GET and POST — don't silently add
+        # the edits back as a brand-new schedule instead.
+        return _redirect("/schedule", "That schedule no longer exists — nothing saved.")
+
+    schedules.append(Schedule(**fields))
     await set_schedules(session, schedules)
     return _redirect("/schedule", "Schedule added.")
 
