@@ -129,7 +129,13 @@ async def run_scan(
     # Walk every configured path up front (cheap — directory listing only,
     # no ffprobe) so the total file count is known before work starts and a
     # progress bar has something to divide by.
-    work_items: list[tuple[Path, LibraryType]] = []
+    # Keyed by path so a file reachable from two configured roots is only
+    # queued once. Configuring both "/movies" and "/movies/4k" is a
+    # reasonable thing to do — it lets the subdirectory carry its own
+    # library type — but it walks everything under 4k twice, which probed
+    # each of those files twice and inflated the total the progress bar
+    # divides by. First root to reach a file decides its library type.
+    work_items: dict[Path, LibraryType] = {}
     for mp in media_paths:
         root = Path(mp.path)
         if not root.exists():
@@ -138,14 +144,14 @@ async def run_scan(
 
         library_type = _library_type_for(mp)
         for file_path in _iter_media_files(root):
-            work_items.append((file_path, library_type))
+            work_items.setdefault(file_path, library_type)
 
     summary.files_total = len(work_items)
 
     await _forget_hidden_files(session, media_paths)
     summary.bytes_reclaimed_from_temp_files = _remove_orphaned_temp_files(media_paths)
 
-    for file_path, library_type in work_items:
+    for file_path, library_type in work_items.items():
         # Checked between files, never mid-file — a probe is read-only and
         # quick, so there's no unsafe "abort partway through" state to worry
         # about here (unlike a remux, see app/actions.py::_apply_changes).

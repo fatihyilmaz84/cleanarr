@@ -5,6 +5,8 @@ that it renders as a genuinely separate page from Rules/Review/Queue.
 
 from __future__ import annotations
 
+import asyncio
+
 import json
 import subprocess
 import time
@@ -343,3 +345,20 @@ def test_a_preferred_language_that_matches_nothing_is_called_out(client: TestCli
 
     resp = client.post("/normalize/settings", data={"naming_style": "dash", "preferred_audio_language": "Klingon"})
     assert "matches no language" in resp.text
+
+
+def test_a_garbled_change_index_is_rejected_not_a_500(client: TestClient):
+    from app.models import ChangeStatus, NormalizationChange
+
+    async def _seed():
+        async with client.app.state.session_factory() as session:
+            change = NormalizationChange(file_id=1, status=ChangeStatus.pending, proposed=[])
+            session.add(change)
+            await session.commit()
+            await session.refresh(change)
+            return change.id
+
+    change_id = asyncio.run(_seed())
+    resp = client.post(f"/normalize/{change_id}/approve", data={"change_index": "not-a-number"})
+    assert resp.status_code == 200
+    assert "malformed submission" in resp.text

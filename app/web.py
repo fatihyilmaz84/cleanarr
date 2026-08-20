@@ -101,6 +101,25 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
     }
 
 
+def parse_index_list(form, field: str) -> list[int] | None:
+    """Integer values of a repeated form field, or None if any of them isn't
+    one.
+
+    These carry stream indices out of the review forms, and a value that
+    isn't a number means the submission didn't come from the rendered form
+    intact. Crashing on it gave a 500 error page; the caller turns None into
+    the same "malformed submission, nothing changed" the neighbouring
+    guards already produce.
+    """
+    values = []
+    for raw in form.getlist(field):
+        try:
+            values.append(int(raw))
+        except (TypeError, ValueError):
+            return None
+    return values
+
+
 def _redirect(path: str, msg: str | None = None) -> RedirectResponse:
     # `path` may already carry a query string (e.g. "/rules?preset=<id>"),
     # in which case the message is a second param — appending a second "?"
@@ -226,7 +245,10 @@ async def ui_approve(change_id: int, request: Request, session: AsyncSession = D
         # checkbox (see review.html) — whatever stayed checked is what
         # actually gets dropped; anything unchecked becomes an override
         # that force-keeps that stream instead.
-        confirmed_drops = {int(v) for v in form.getlist("drop_index")}
+        drop_indices = parse_index_list(form, "drop_index")
+        if drop_indices is None:
+            return _redirect("/review", "Approve failed — malformed submission, nothing changed.")
+        confirmed_drops = set(drop_indices)
         proposed_drops = {p["index"] for p in change.proposed if not p["keep"]}
         change.overrides = sorted(proposed_drops - confirmed_drops)
         change.status = ChangeStatus.approved
@@ -619,7 +641,10 @@ def _parse_schedule_form(form) -> dict:
                 end_hour = end_minute = None
     except ValueError:
         raise ValueError("Invalid time — not saved.") from None
-    days_of_week = [int(d) for d in form.getlist("days_of_week")]
+    days_of_week = parse_index_list(form, "days_of_week")
+    if days_of_week is None:
+        raise ValueError("Invalid days — not saved.")
+    days_of_week = [d for d in days_of_week if 0 <= d <= 6]
 
     run_clean = "run_clean" in form
     run_normalize = "run_normalize" in form

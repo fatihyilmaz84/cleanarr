@@ -523,3 +523,33 @@ async def test_a_fragment_is_kept_when_it_is_the_only_copy(tmp_path, media_dir, 
     assert summary.bytes_reclaimed_from_temp_files == 0
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_file_reachable_from_two_roots_is_only_scanned_once(tmp_path, monkeypatch):
+    """Configuring both "/movies" and "/movies/4k" is reasonable — it lets
+    the subdirectory carry its own library type — but everything under 4k is
+    then walked twice, probing those files twice and inflating the total the
+    progress bar divides by.
+    """
+    movies = tmp_path / "movies"
+    (movies / "4k").mkdir(parents=True)
+    (movies / "A.mkv").write_bytes(b"x" * 1000)
+    (movies / "4k" / "B.mkv").write_bytes(b"x" * 1000)
+
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    paths = [
+        MediaPath(path=str(movies), library_type="movie"),
+        MediaPath(path=str(movies / "4k"), library_type="movie"),
+    ]
+    async with session_factory() as session:
+        summary = await run_scan(session, paths, RuleConfig())
+
+    assert summary.files_total == 2
+    assert summary.files_scanned == 2
+
+    await engine.dispose()

@@ -23,7 +23,7 @@ from app.settings_store import (
     set_normalizer_config,
     set_normalizer_presets,
 )
-from app.web import _base_context, _paginate, _redirect, _split_csv, templates
+from app.web import _base_context, _paginate, _redirect, _split_csv, parse_index_list, templates
 
 normalize_router = APIRouter()
 
@@ -155,7 +155,10 @@ async def ui_normalize_approve(change_id: int, request: Request, session: AsyncS
         # (see normalize.html) — whatever stayed checked gets applied;
         # anything unchecked becomes an override that leaves that track
         # untouched instead.
-        confirmed = {int(v) for v in form.getlist("change_index")}
+        change_indices = parse_index_list(form, "change_index")
+        if change_indices is None:
+            return _redirect("/normalize", "Nothing queued — malformed submission.")
+        confirmed = set(change_indices)
         proposed_changed = {p["index"] for p in change.proposed if p["changed"]}
         change.overrides = sorted(proposed_changed - confirmed)
         change.status = ChangeStatus.approved

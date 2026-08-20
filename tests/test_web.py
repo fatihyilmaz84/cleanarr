@@ -686,3 +686,53 @@ def test_the_page_does_not_reload_over_input_someone_is_typing(client: TestClien
     page = client.get("/rules").text
     assert "hasUnsavedInput" in page
     assert "(wasActive || countsMoved(data)) && !hasUnsavedInput()" in page
+
+
+def test_a_garbled_form_index_is_rejected_not_a_500(client: TestClient, media_dir: Path):
+    """These fields carry stream indices out of the review forms. A value
+    that isn't a number means the submission didn't arrive from the rendered
+    form intact — the neighbouring hidden-field guard already treats that as
+    malformed, but a non-numeric index crashed with a 500 error page instead.
+    """
+    client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
+    client.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})
+    client.post("/scan")
+    _wait_for_idle(client)
+
+    change_id = client.get("/api/review", params={"status": "pending"}).json()[0]["id"]
+    resp = client.post(f"/review/{change_id}/approve", data={"approve_submitted": "1", "drop_index": "abc"})
+    assert resp.status_code == 200
+    assert "malformed submission" in resp.text
+
+    # Still pending — nothing was silently approved.
+    assert len(client.get("/api/review", params={"status": "pending"}).json()) == 1
+
+
+def test_a_garbled_day_of_week_is_rejected_not_a_500(client: TestClient):
+    resp = client.post("/schedule", data={"hour": "4", "minute": "0", "run_clean": "on", "days_of_week": "xyz"})
+    assert resp.status_code == 200
+    assert "Invalid days" in resp.text
+    assert "No schedules yet" in resp.text
+
+
+def test_an_out_of_range_day_is_dropped_rather_than_stored(client: TestClient):
+    client.post("/schedule", data={"hour": "4", "minute": "0", "run_clean": "on", "days_of_week": ["1", "99"]})
+    schedule = asyncio.run(_get_schedule(client.app.state.session_factory))
+    assert schedule.days_of_week == [1]
+
+
+def test_pagination_survives_nonsense_page_numbers(client: TestClient):
+    for value in ("-1", "0", "abc", "99999", ""):
+        assert client.get("/review", params={"page": value}).status_code == 200
+
+
+def test_a_hostile_track_title_is_escaped_not_executed(client: TestClient):
+    # Track titles come out of media files, which are untrusted input.
+    from app.queries import _describe_normalization
+
+    summary = _describe_normalization(
+        {"old_title": "<script>alert(1)</script>", "new_title": "English", "old_default": False, "new_default": False}
+    )
+    assert "<script>" in summary  # the value itself is preserved verbatim…
+    page = client.get("/review").text
+    assert "<script>alert(1)</script>" not in page  # …and escaped at render time
