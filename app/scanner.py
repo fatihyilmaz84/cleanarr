@@ -63,7 +63,25 @@ class ScanSummary:
 
 
 def _iter_media_files(root: Path):
+    """Every real media file under `root`, skipping hidden ones.
+
+    A dotfile with a media extension is never library media, and two kinds
+    show up in practice:
+
+    - `._Movie.mkv` — AppleDouble resource forks, written by macOS whenever
+      a file is copied to an SMB share. They carry the full name of the file
+      beside them, extension included, so they match on extension and then
+      fail to probe. There were 79 of them in the library this runs on,
+      producing 79 identical errors on every single scan, forever, and
+      inflating the file count the progress bar divides by.
+    - `.cleanarr.tmp.Movie.mkv` — this app's own remux temp file
+      (app/remux.py). Normally cleaned up, but a container killed mid-remux
+      leaves one behind, and picking it up would mean proposing changes
+      against a half-written file.
+    """
     for path in sorted(root.rglob("*")):
+        if path.name.startswith("."):
+            continue
         if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
             yield path
 

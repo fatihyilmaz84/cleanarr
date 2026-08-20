@@ -311,3 +311,36 @@ async def test_scan_survives_a_file_that_disappears_mid_scan(tmp_path, media_dir
     assert any("Vanishing.mkv" in e for e in summary.errors)
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_scan_skips_hidden_files(tmp_path, media_dir, monkeypatch):
+    """Two kinds of dotfile carry a media extension and must never be treated
+    as library media: macOS AppleDouble stubs (`._Movie.mkv`, written to any
+    SMB share and unprobeable — there were 79 in the live library, failing on
+    every scan forever), and this app's own remux temp file, which a
+    container killed mid-remux leaves behind half-written.
+    """
+    (media_dir / "._Movie.mkv").write_bytes(b"applesauce")
+    (media_dir / ".cleanarr.tmp.Movie.mkv").write_bytes(b"half-written")
+
+    probed = []
+
+    def probe(path):
+        probed.append(path.name)
+        return _make_probe(path)
+
+    monkeypatch.setattr("app.scanner.probe_file", probe)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        summary = await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    assert probed == ["Movie.mkv"]
+    assert summary.files_total == 1  # and the progress denominator isn't inflated by them
+    assert summary.errors == []
+
+    await engine.dispose()
