@@ -147,6 +147,14 @@ def _describe_normalization(p: dict) -> str:
     if old_title != new_title:
         parts.append(f'{_track_label(p)} → "{new_title}"')
 
+    old_language = p.get("old_language") or None
+    new_language = p.get("new_language") or None
+    if new_language != old_language:
+        # Only ever happens for a track the file never labelled, where the
+        # language was read out of the track's own text — worth saying so,
+        # since this one is inferred rather than reformatted.
+        parts.append(f"language identified as {new_language}" if not old_language else f"language {old_language} → {new_language}")
+
     new_default = p.get("new_default")
     if new_default is not None and bool(new_default) != bool(p.get("old_default")):
         parts.append("set as default" if new_default else "no longer default")

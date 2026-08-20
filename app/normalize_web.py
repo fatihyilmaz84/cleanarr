@@ -78,6 +78,7 @@ async def ui_save_normalize_settings(request: Request, session: AsyncSession = D
         preferred_audio_language=form.get("preferred_audio_language", "").strip(),
         preferred_subtitle_language=form.get("preferred_subtitle_language", "").strip(),
         forced_equivalents_enabled="forced_equivalents_enabled" in form,
+        detect_subtitle_language="detect_subtitle_language" in form,
         forced_title_patterns=_split_csv(form.get("forced_title_patterns", "")),
         forced_equivalent_patterns=_split_csv(form.get("forced_equivalent_patterns", "")),
         commentary_title_patterns=_split_csv(form.get("commentary_title_patterns", "")),

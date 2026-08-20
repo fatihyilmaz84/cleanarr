@@ -37,6 +37,15 @@
       <p class="font-body-md text-body-md text-on-surface-variant mt-1">Applied library-wide — one canonical scheme, not per-file.</p>
     </div>
 
+    <div class="tech-border rounded-DEFAULT p-4">
+      <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+        <input type="checkbox" name="detect_subtitle_language" {% if config.detect_subtitle_language %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+        Identify unlabelled subtitles by reading their text
+      </label>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7 mt-1">Some releases ship a subtitle track with no language <em>and</em> no title, so there is nothing to name it from — it shows up as just <span class="font-code-md">s2 · SRT</span>. This reads the first 15 minutes of such a track and works out the language from the words in it, then proposes both a proper title and the missing language tag.</p>
+      <p class="font-body-md text-[13px] text-on-surface-variant ml-7 mt-1">The only setting here that <em>infers</em> metadata rather than reformatting what the file already states, and the language tag does get written into the file — so it's off by default, and it declines to answer rather than guess when the text isn't decisive (Danish and Norwegian dialogue, for instance, is usually too alike to call). Text subtitles only; image-based ones (PGS, VobSub) would need OCR. Each track is read once and the result remembered.</p>
+    </div>
+
     <div class="flex gap-4">
       <div class="flex-1">
         <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Preferred audio language</label>

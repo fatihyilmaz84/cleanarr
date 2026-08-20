@@ -34,6 +34,15 @@ class NormalizerConfig(BaseModel):
 
     naming_style: str = "dash"  # "dash" -> "English - SDH", "space" -> "English SDH"
 
+    # Read an untagged text subtitle's own text to work out its language
+    # (app/language_detect.py), for tracks the file labelled with neither a
+    # language nor a title. Off by default: it is the only thing here that
+    # infers metadata rather than reformatting what the file already states,
+    # and a detected language is *written into the file* as a language tag,
+    # so it stays an explicit opt-in. The detector declines rather than
+    # guesses when the text doesn't clearly say.
+    detect_subtitle_language: bool = False
+
     auto_default_audio: bool = False
     auto_default_subtitle: bool = False
     preferred_audio_language: str = ""
@@ -240,12 +249,26 @@ def _pick_default_index(streams: list[MediaStream], codec_type: str, preferred_c
     return (already_default or candidates[0]).index
 
 
-def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> list[TrackNormalization]:
+def normalize_streams(
+    streams: list[MediaStream],
+    config: NormalizerConfig,
+    detected_languages: dict[int, str] | None = None,
+) -> list[TrackNormalization]:
     """Evaluate every audio/subtitle stream against `config`. Video and
     unrecognized stream types are never touched — this only ever retitles/
     retags audio and subtitle tracks, same scope as app/rules.py's drop
     engine.
+
+    `detected_languages` maps a stream index to a language worked out from
+    that track's own text, for tracks the file never labelled. It is passed
+    in rather than computed here because identifying it means decoding part
+    of the file, and this function is pure — see app/normalize_service.py,
+    which does the reading. A track with a detected language is titled from
+    it *and* has the language tag written, which is the whole point: an
+    untagged track stays unidentifiable to every other player until
+    something writes the tag.
     """
+    detected = detected_languages or {}
     preferred_audio_codes = iso_codes_for_language_name(config.preferred_audio_language)
     preferred_subtitle_codes = iso_codes_for_language_name(config.preferred_subtitle_language)
     audio_default_index = _pick_default_index(streams, "audio", preferred_audio_codes) if config.auto_default_audio else None
@@ -260,7 +283,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
     # but don't commit to a title yet — two same-language tracks of the same
     # type can produce identical titles, and resolving that needs to see the
     # whole file (pass 2 below).
-    planned: list[tuple[MediaStream, str, str, list[str]]] = []
+    planned: list[tuple[MediaStream, str, str, list[str], str | None]] = []
 
     for stream in streams:
         if stream.codec_type not in ("audio", "subtitle"):
@@ -269,7 +292,8 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
         type_counts[stream.codec_type] = type_counts.get(stream.codec_type, 0) + 1
         track_selector = f"{_TRACK_TYPE_LETTER[stream.codec_type]}{type_counts[stream.codec_type]}"
 
-        language_name = language_name_for_code(stream.language)
+        effective_language = stream.language or detected.get(stream.index)
+        language_name = language_name_for_code(effective_language)
         if language_name is None:
             results.append(
                 TrackNormalization(
@@ -292,7 +316,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
             continue
 
         attributes = _audio_attributes(stream, config) if stream.codec_type == "audio" else _subtitle_attributes(stream, config)
-        planned.append((stream, track_selector, language_name, attributes))
+        planned.append((stream, track_selector, language_name, attributes, effective_language))
 
     # Pass 2: where more than one track of the same type would land on the
     # same title, add a disambiguating suffix so a player's track picker
@@ -304,7 +328,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
     # without disambiguating anything, and inventing an index instead would
     # be arbitrary. In that case they're left identical, honestly.
     groups: dict[tuple[str, str], list[MediaStream]] = {}
-    for stream, _selector, name, attrs in planned:
+    for stream, _selector, name, attrs, _lang in planned:
         groups.setdefault((stream.codec_type, _build_title(name, attrs, config.naming_style)), []).append(stream)
 
     suffix_by_index: dict[int, str] = {}
@@ -331,7 +355,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
         if all(t for t in old_titles) and len(set(old_titles)) == len(group):
             collapse_would_lose_detail.update(s.index for s in group)
 
-    for stream, track_selector, language_name, attributes in planned:
+    for stream, track_selector, language_name, attributes, effective_language in planned:
         if stream.index in collapse_would_lose_detail:
             results.append(
                 TrackNormalization(
@@ -368,11 +392,14 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
 
         title_changed = new_title != (stream.title or "")
         default_changed = new_default is not None and new_default != stream.is_default
-        changed = title_changed or default_changed
+        language_changed = (effective_language or None) != (stream.language or None)
+        changed = title_changed or default_changed or language_changed
 
         reason_parts = []
         if title_changed:
             reason_parts.append(f"title '{stream.title or ''}' -> '{new_title}'")
+        if language_changed:
+            reason_parts.append(f"language identified from the track's own text as '{effective_language}'")
         if default_changed:
             reason_parts.append(f"default -> {new_default}")
         reason = "; ".join(reason_parts) if reason_parts else "already normalized"
@@ -385,7 +412,12 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
                 old_title=stream.title,
                 new_title=new_title,
                 old_language=stream.language,
-                new_language=stream.language,  # normalization never changes the language code itself, only how it's displayed
+                # Normally identical: normalization reformats how a language
+                # is displayed, it doesn't reinterpret it. The exception is a
+                # track the file never labelled at all, where the language
+                # was read out of the track's own text — writing that tag is
+                # the only way the track becomes identifiable elsewhere.
+                new_language=effective_language,
                 old_default=stream.is_default,
                 new_default=new_default,
                 changed=changed,

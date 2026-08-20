@@ -22,11 +22,11 @@ def make_engine(db_path: Path | None = None) -> AsyncEngine:
     resolved.parent.mkdir(parents=True, exist_ok=True)
     engine = create_async_engine(f"sqlite+aiosqlite:///{resolved}", echo=False)
 
-    # Scanning does a commit per file (needed so a rule/arr-config change is
-    # reflected file-by-file, see app/scanner.py) — on a scan of thousands of
-    # files, SQLite's default per-commit fsync makes that thousands of disk
-    # syncs. WAL mode + synchronous=NORMAL keeps commits durable across an
-    # app/OS crash while dropping most of that fsync cost.
+    # A scan commits in batches (see app/scanner.py), but even batched, a
+    # large library is a lot of commits and SQLite fsyncs on every one by
+    # default. WAL mode + synchronous=NORMAL keeps them durable across an
+    # app/OS crash while dropping most of that cost, and lets the UI read
+    # while a scan writes.
     @event.listens_for(engine.sync_engine, "connect")
     def _set_sqlite_pragmas(dbapi_connection, connection_record) -> None:
         cursor = dbapi_connection.cursor()
@@ -44,7 +44,9 @@ async def init_db(engine: AsyncEngine) -> None:
         await _add_missing_columns(conn, "pending_changes", {"overrides": "JSON", "rule_preset_id": "VARCHAR"})
         await _add_missing_columns(conn, "normalization_changes", {"normalizer_preset_id": "VARCHAR"})
         await _add_missing_columns(
-            conn, "streams", {"channels": "INTEGER", "is_visual_impaired": "BOOLEAN DEFAULT 0"}
+            conn,
+            "streams",
+            {"channels": "INTEGER", "is_visual_impaired": "BOOLEAN DEFAULT 0", "detected_language": "VARCHAR"},
         )
         await _add_missing_index(conn, "ix_pending_changes_status", "pending_changes", "status")
         await _add_missing_index(conn, "ix_normalization_changes_status", "normalization_changes", "status")

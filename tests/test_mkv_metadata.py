@@ -94,3 +94,33 @@ def test_apply_metadata_changes_raises_when_binary_missing(monkeypatch):
     monkeypatch.setattr(subprocess, "run", fake_run)
     with pytest.raises(MkvMetadataError, match="not found"):
         apply_metadata_changes(Path("movie.mkv"), [_change()])
+
+
+def test_a_detected_language_is_written_as_a_language_tag():
+    """The whole point of detection: without --set language= the track stays
+    unidentifiable to every other player, however nicely it is titled.
+    """
+    from pathlib import Path
+
+    from app.mkv_metadata import build_mkvpropedit_command
+    from app.normalizer import TrackNormalization
+
+    change = TrackNormalization(
+        index=1,
+        codec_type="subtitle",
+        track_selector="s1",
+        old_title=None,
+        new_title="Dutch",
+        old_language=None,
+        new_language="dut",
+        old_default=False,
+        new_default=None,
+        changed=True,
+        reason="language identified from the track's own text as 'dut'",
+    )
+
+    cmd = build_mkvpropedit_command(Path("movie.mkv"), [change])
+
+    assert "--edit" in cmd and "track:s1" in cmd
+    assert "name=Dutch" in cmd
+    assert "language=dut" in cmd

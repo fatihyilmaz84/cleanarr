@@ -123,6 +123,48 @@ class MediaProbe:
         return [s for s in self.streams if s.codec_type == "subtitle"]
 
 
+# Subtitle codecs whose payload is text, so it can be read out and looked
+# at. Bitmap subtitles (PGS, VobSub) would need OCR and are left alone.
+TEXT_SUBTITLE_CODECS = frozenset({"subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "subviewer", "text"})
+
+FFMPEG_BIN = "ffmpeg"
+SUBTITLE_SAMPLE_SECONDS = 900
+
+
+def extract_subtitle_text(
+    path: Path,
+    stream_index: int,
+    *,
+    ffmpeg_bin: str = FFMPEG_BIN,
+    sample_seconds: int = SUBTITLE_SAMPLE_SECONDS,
+    timeout: int = 120,
+) -> str:
+    """The text of one subtitle track, as SRT, for the first
+    `sample_seconds` of the timeline.
+
+    Read-only, like everything else in this module — it decodes to stdout
+    and never writes near the file. A sample rather than the whole track
+    because identifying a language needs a paragraph, not a screenplay.
+    Returns "" when the track can't be read, since a track that won't
+    decode is simply one that can't be identified, not an error worth
+    failing a whole normalize pass over.
+    """
+    cmd = [
+        ffmpeg_bin, "-v", "error",
+        "-t", str(sample_seconds),
+        "-i", str(path),
+        "-map", f"0:{stream_index}",
+        "-f", "srt", "-",
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout or ""
+
+
 def probe_file(path: Path, ffprobe_bin: str = FFPROBE_BIN) -> MediaProbe:
     """Run ffprobe on `path` and return its normalized stream layout.
 

@@ -233,3 +233,43 @@ def test_a_group_that_can_be_disambiguated_still_is():
     results = normalize_streams(streams, NormalizerConfig())
 
     assert [n.new_title for n in results] == ["English - 5.1", "English - Stereo"]
+
+
+def test_a_detected_language_names_the_track_and_writes_the_missing_tag():
+    """The case this exists for: a track with no language and no title, so
+    there is nothing to name it from. Given a language read out of its own
+    text, it gets both a title and — crucially — the language tag, without
+    which it stays unidentifiable to every other player.
+    """
+    streams = [
+        make_stream(0, "video", codec_name="h264", language=None),
+        make_stream(1, "subtitle", codec_name="subrip", language=None, title=None),
+    ]
+
+    result = normalize_streams(streams, NormalizerConfig(), detected_languages={1: "dut"})[0]
+
+    assert result.new_title == "Dutch"
+    assert result.old_language is None
+    assert result.new_language == "dut"
+    assert result.changed is True
+    assert "identified from the track's own text" in result.reason
+
+
+def test_detection_never_overrides_a_language_the_file_already_states():
+    # The file's own tag is authoritative; detection only fills a gap.
+    streams = [make_stream(1, "subtitle", codec_name="subrip", language="eng", title=None)]
+
+    result = normalize_streams(streams, NormalizerConfig(), detected_languages={1: "dut"})[0]
+
+    assert result.new_language == "eng"
+    assert result.new_title == "English"
+
+
+def test_without_a_detection_an_unlabelled_track_is_left_alone():
+    streams = [make_stream(1, "subtitle", codec_name="subrip", language=None, title=None)]
+
+    result = normalize_streams(streams, NormalizerConfig())[0]
+
+    assert result.changed is False
+    assert result.new_language is None
+    assert "no language tag" in result.reason

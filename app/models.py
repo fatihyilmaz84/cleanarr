@@ -68,6 +68,12 @@ class StreamRecord(SQLModel, table=True):
     is_commentary: bool = False
     is_hearing_impaired: bool = False
     is_visual_impaired: bool = False
+    # Language worked out from the track's own text, for tracks the file
+    # itself never labelled (see app/language_detect.py). Three states:
+    # NULL = never attempted, "" = attempted and not confident enough to
+    # say, a code = what it is. The empty string matters — without it every
+    # pass would re-decode the same unidentifiable tracks forever.
+    detected_language: str | None = None
 
 
 class PendingChange(SQLModel, table=True):

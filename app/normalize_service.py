@@ -17,7 +17,8 @@ from typing import Callable
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.analyzer import AnalyzerError, MediaStream, probe_file
+from app.analyzer import TEXT_SUBTITLE_CODECS, AnalyzerError, MediaStream, extract_subtitle_text, probe_file
+from app.language_detect import detect_language
 from app.mkv_metadata import MkvMetadataError, apply_metadata_changes, is_mkv
 from app.models import ChangeStatus, MediaFile, NormalizationChange, PendingChange, StreamRecord
 from app.normalizer import (
@@ -68,6 +69,56 @@ def _stream_from_record(record: StreamRecord) -> MediaStream:
         is_hearing_impaired=record.is_hearing_impaired,
         is_visual_impaired=record.is_visual_impaired,
     )
+
+
+def _record_like(stream: MediaStream) -> StreamRecord:
+    """A throwaway StreamRecord view of a freshly probed stream, so
+    _detect_missing_languages can run against the re-probed file at apply
+    time using the same code path as the propose pass. Not added to the
+    session — the persisted rows are rewritten by the caller from the probe.
+    """
+    return StreamRecord(
+        file_id=0,
+        stream_index=stream.index,
+        codec_type=stream.codec_type,
+        codec_name=stream.codec_name,
+        language=stream.language,
+        title=stream.title,
+    )
+
+
+async def _detect_missing_languages(
+    session: AsyncSession, media_file: MediaFile, records: list[StreamRecord]
+) -> dict[int, str]:
+    """Work out the language of any text subtitle the file labelled with
+    neither a language nor a title, by reading the track's own text.
+
+    Results are stored on the StreamRecord so this decodes each track once
+    ever, not once per pass: an empty string records "looked, couldn't tell"
+    and is as important to persist as a positive answer, since otherwise
+    every pass would re-decode the same unidentifiable tracks forever.
+    """
+    detected: dict[int, str] = {}
+    for record in records:
+        persist = record.file_id != 0  # see _record_like: apply-time views aren't stored
+        if record.detected_language:
+            detected[record.stream_index] = record.detected_language
+            continue
+        if record.detected_language is not None:
+            continue  # "" — already looked, nothing conclusive
+        if record.codec_type != "subtitle" or record.language or (record.title or "").strip():
+            continue
+        if record.codec_name not in TEXT_SUBTITLE_CODECS:
+            continue  # bitmap subtitles would need OCR
+
+        text = await asyncio.to_thread(extract_subtitle_text, Path(media_file.path), record.stream_index)
+        code = detect_language(text) if text else None
+        record.detected_language = code or ""
+        if persist:
+            session.add(record)
+        if code:
+            detected[record.stream_index] = code
+    return detected
 
 
 def _dropped_indices_from_change(change: PendingChange | None) -> set[int]:
@@ -202,7 +253,8 @@ async def propose_normalizations(
         # _dropped_indices_from_change's docstring.
         all_streams = [_stream_from_record(r) for r in records]
         dropped = _dropped_indices_from_change(pending_change_by_file.get(media_file.id))
-        normalizations = normalize_streams(all_streams, config)
+        detected = await _detect_missing_languages(session, media_file, records) if config.detect_subtitle_language else {}
+        normalizations = normalize_streams(all_streams, config, detected_languages=detected)
         normalizations = apply_overrides(normalizations, sorted(dropped), reason=SKIPPED_PENDING_REMOVAL)
         changed = [n for n in normalizations if n.changed]
 
@@ -316,7 +368,20 @@ async def apply_normalization_change(
     dropped = _dropped_indices_from_change(active_change)
 
     all_streams = probe.streams
-    normalizations = normalize_streams(all_streams, config)
+    # Re-detect from the *re-probed* file rather than reusing what propose
+    # stored: the file may have been replaced since (the same reason the
+    # probe above is re-run), and a language read out of the old file's text
+    # must not be written onto a different one's track.
+    detected = (
+        await _detect_missing_languages(
+            session,
+            media_file,
+            [_record_like(s) for s in all_streams],
+        )
+        if config.detect_subtitle_language
+        else {}
+    )
+    normalizations = normalize_streams(all_streams, config, detected_languages=detected)
     # Both exclusions — currently-proposed-for-removal and the user's own
     # skip selections — are applied the same way, after full-file selector
     # computation, for the same reason: neither may safely trim the input.

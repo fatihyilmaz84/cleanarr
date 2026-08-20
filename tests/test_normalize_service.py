@@ -509,3 +509,80 @@ async def test_apply_reprobes_and_does_not_trust_stale_cached_tracks(session_fac
             (0, "jpn", "Japanese"),
             (1, "eng", "English"),
         ]
+
+
+@pytest.mark.asyncio
+async def test_an_unlabelled_subtitle_is_decoded_once_and_the_result_remembered(session_factory, tmp_path, monkeypatch):
+    """Reading a track's text costs an ffmpeg decode, so the answer is stored
+    on the StreamRecord. The negative answer matters just as much: without
+    persisting "looked, couldn't tell", every pass would re-decode the same
+    unidentifiable tracks forever.
+    """
+    import app.normalize_service as svc
+
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    file_id = await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [
+            {"stream_index": 0, "codec_type": "video", "codec_name": "h264"},
+            # no language, no title — nothing to name it from
+            {"stream_index": 1, "codec_type": "subtitle", "codec_name": "subrip"},
+            # unreadable text, so detection will decline
+            {"stream_index": 2, "codec_type": "subtitle", "codec_name": "subrip"},
+            # bitmap: never worth decoding, it would need OCR
+            {"stream_index": 3, "codec_type": "subtitle", "codec_name": "hdmv_pgs_subtitle"},
+            # already labelled: nothing to fill in
+            {"stream_index": 4, "codec_type": "subtitle", "codec_name": "subrip", "language": "eng"},
+        ],
+    )
+
+    decoded = []
+
+    def fake_extract(path, stream_index, **kwargs):
+        decoded.append(stream_index)
+        return "Hoe is het gegaan? Je ruikt lekker. " * 20 if stream_index == 1 else "[MUSIC] ♪♪♪ " * 20
+
+    monkeypatch.setattr(svc, "extract_subtitle_text", fake_extract)
+    config = NormalizerConfig(detect_subtitle_language=True)
+
+    async with session_factory() as session:
+        await propose_normalizations(session, config)
+
+    assert sorted(decoded) == [1, 2]  # not the bitmap track, not the labelled one
+
+    async with session_factory() as session:
+        rows = (await session.exec(select(StreamRecord).where(StreamRecord.file_id == file_id))).all()
+        by_index = {r.stream_index: r for r in rows}
+    assert by_index[1].detected_language == "dut"
+    assert by_index[2].detected_language == ""  # looked, nothing conclusive
+    assert by_index[3].detected_language is None  # never attempted
+
+    # A second pass must not decode anything again.
+    decoded.clear()
+    async with session_factory() as session:
+        await propose_normalizations(session, config)
+    assert decoded == []
+
+
+@pytest.mark.asyncio
+async def test_detection_is_off_unless_enabled(session_factory, tmp_path, monkeypatch):
+    import app.normalize_service as svc
+
+    (tmp_path / "Movie.mkv").write_bytes(b"x")
+    await _seed_file(
+        session_factory,
+        str(tmp_path / "Movie.mkv"),
+        [
+            {"stream_index": 0, "codec_type": "video", "codec_name": "h264"},
+            {"stream_index": 1, "codec_type": "subtitle", "codec_name": "subrip"},
+        ],
+    )
+
+    called = []
+    monkeypatch.setattr(svc, "extract_subtitle_text", lambda *a, **k: called.append(1) or "")
+
+    async with session_factory() as session:
+        await propose_normalizations(session, NormalizerConfig())
+
+    assert called == []
