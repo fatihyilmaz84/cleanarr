@@ -237,14 +237,18 @@
     {{ pending_review_count or 0 }},
     {{ queued_count or 0 }},
     {{ normalize_pending_count or 0 }},
-    {{ normalize_queued_count or 0 }}
+    {{ normalize_queued_count or 0 }},
+    {{ _overview_stats.total_files if _overview_stats else 0 }}
   ];
 
   function countsMoved(data) {
     return renderedCounts[0] !== data.pending_review_count
       || renderedCounts[1] !== data.queued_count
       || renderedCounts[2] !== data.normalize_pending_count
-      || renderedCounts[3] !== data.normalize_queued_count;
+      || renderedCounts[3] !== data.normalize_queued_count
+      // A scan can add files without moving any review/queue count — that
+      // still leaves "Files Tracked" on the page reporting the old number.
+      || renderedCounts[4] !== data.total_files;
   }
   var failures = 0;
   var timer = null;

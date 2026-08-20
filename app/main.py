@@ -213,6 +213,10 @@ async def status(request: Request, session: AsyncSession = Depends(get_session))
             "message": failed.message,
             "finished_at": failed.finished_at.isoformat() if failed.finished_at else None,
         },
+        # Already computed by overview_stats above, so this costs no extra
+        # query — and it's the signal that a scan added or removed files
+        # without moving any of the review/queue counts.
+        "total_files": stats["total_files"],
         "pending_review_count": stats["pending_review_count"],
         "queued_count": stats["queued_count"],
         "normalize_pending_count": norm_stats["pending_count"],
