@@ -8,7 +8,7 @@ client-side JS.
 
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time, timedelta, timezone
 from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
@@ -17,7 +17,7 @@ from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.actions import submit_apply_job, submit_scan_job
+from app.actions import build_arr_client, submit_apply_job, submit_scan_job
 from app.deps import get_session
 from app.jobs import JobManager
 from app.languages import LANGUAGE_OPTIONS, iso_codes_for_language_name
@@ -26,11 +26,13 @@ from app.queries import list_history_items, list_review_items, normalize_stats, 
 from app.rules import RuleConfig
 from app.settings_store import (
     ArrConfig,
+    ArrConnectionStatus,
     DisplaySettings,
     MediaPath,
     RulePreset,
     Schedule,
     get_arr_config,
+    get_arr_status,
     get_display_settings,
     get_media_paths,
     get_normalizer_presets,
@@ -38,6 +40,7 @@ from app.settings_store import (
     get_rule_presets,
     get_schedules,
     set_arr_config,
+    set_arr_status,
     set_display_settings,
     set_media_paths,
     set_rule_config,
@@ -429,8 +432,38 @@ async def ui_settings(request: Request, session: AsyncSession = Depends(get_sess
     ctx = await _base_context(request, session)
     ctx["media_paths"] = await get_media_paths(session)
     ctx["arr"] = (await get_arr_config(session)).redacted()
+    # Last *stored* test result, not a fresh one — testing on every page load
+    # would block the render on two network round trips (up to 15s each).
+    ctx["arr_status"] = await get_arr_status(session)
     ctx["available_timezones"] = sorted(available_timezones())
     return templates.TemplateResponse(request, "settings.html", ctx)
+
+
+async def _test_and_store_arr(session: AsyncSession, services: list[str]) -> list[str]:
+    """Test each named service, persist the result, return one summary line
+    per service for the redirect message.
+    """
+    client = build_arr_client(await get_arr_config(session))
+    messages = []
+    for service in services:
+        result = await client.test_connection(service)
+        await set_arr_status(
+            session,
+            service,
+            ArrConnectionStatus(ok=result.ok, detail=result.detail, checked_at=datetime.now(timezone.utc)),
+        )
+        label = service.capitalize()
+        messages.append(f"{label}: {'OK — ' if result.ok else 'failed — '}{result.detail}")
+    return messages
+
+
+@web_router.post("/settings/arr/test")
+async def ui_test_arr(request: Request, session: AsyncSession = Depends(get_session)):
+    form = await request.form()
+    requested = form.get("service", "").strip()
+    services = [requested] if requested in ("radarr", "sonarr") else ["radarr", "sonarr"]
+    messages = await _test_and_store_arr(session, services)
+    return _redirect("/settings", " · ".join(messages))
 
 
 @web_router.post("/settings/display")
@@ -472,7 +505,13 @@ async def ui_save_arr(request: Request, session: AsyncSession = Depends(get_sess
         sonarr_api_key=form.get("sonarr_api_key") or existing.sonarr_api_key,
     )
     await set_arr_config(session, config)
-    return _redirect("/settings", "Sonarr/Radarr connection saved.")
+
+    # Test right after saving rather than making the user click a second
+    # button: getting these details wrong is the whole failure mode, and the
+    # answer is worth the round trip at exactly this moment. A service left
+    # unconfigured just reports that and costs no request.
+    messages = await _test_and_store_arr(session, ["radarr", "sonarr"])
+    return _redirect("/settings", "Connection saved. " + " · ".join(messages))
 
 
 DAY_NAMES = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]

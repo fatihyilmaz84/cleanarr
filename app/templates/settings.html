@@ -1,6 +1,32 @@
 {% extends "base.html" %}
 {% block title %}Settings — Cleanarr{% endblock %}
 {% block page_title %}Settings{% endblock %}
+
+{# Result of the last connection test for one service. `status` is None when
+   the connection has never been tested — deliberately blank rather than a
+   red cross, since "not checked yet" is not the same as "broken". #}
+{% macro connection_badge(status) %}
+{% if status %}
+  {% if status.ok %}
+<span class="font-label-caps text-label-caps text-secondary inline-flex items-center gap-1.5" title="Last checked {{ (status.checked_at | localtime(display_timezone)).strftime('%b %d, %H:%M') if status.checked_at else 'never' }}">
+  <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+    <path d="M3 8.5l3.5 3.5L13 4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+  Connected{% if status.detail %} · {{ status.detail }}{% endif %}
+</span>
+  {% else %}
+<span class="font-label-caps text-label-caps text-tertiary inline-flex items-center gap-1.5" title="{{ status.detail }}">
+  <svg viewBox="0 0 16 16" class="w-3.5 h-3.5" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true">
+    <path d="M4 4l8 8M12 4l-8 8" stroke-linecap="round"/>
+  </svg>
+  {{ status.detail or "Not connected" }}
+</span>
+  {% endif %}
+{% else %}
+<span class="font-label-caps text-label-caps text-on-surface-variant/60">Not checked yet</span>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
 <div class="glass-panel rounded-lg p-6 max-w-2xl">
   <h3 class="font-label-caps text-label-caps text-on-surface-variant mb-4 border-b border-white/10 pb-2">Media Paths</h3>
@@ -17,7 +43,10 @@
   <p class="font-body-md text-body-md text-on-surface-variant mb-4">Used only to look up titles/posters for display — never writes anything back, never triggers a re-import.</p>
   <form method="post" action="/settings/arr" class="space-y-4">
     <div>
-      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Radarr URL</label>
+      <div class="flex items-center justify-between mb-2">
+        <label class="font-label-caps text-label-caps text-on-surface-variant">Radarr URL</label>
+        {{ connection_badge(arr_status.get("radarr")) }}
+      </div>
       <input name="radarr_url" value="{{ arr.radarr_url or '' }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="http://192.168.178.164:7878">
     </div>
     <div>
@@ -25,14 +54,23 @@
       <input type="password" name="radarr_api_key" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="{{ 'unchanged — leave blank to keep' if arr.radarr_api_key else '' }}">
     </div>
     <div>
-      <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Sonarr URL</label>
+      <div class="flex items-center justify-between mb-2">
+        <label class="font-label-caps text-label-caps text-on-surface-variant">Sonarr URL</label>
+        {{ connection_badge(arr_status.get("sonarr")) }}
+      </div>
       <input name="sonarr_url" value="{{ arr.sonarr_url or '' }}" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="http://192.168.178.164:8989">
     </div>
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Sonarr API Key</label>
       <input type="password" name="sonarr_api_key" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50" placeholder="{{ 'unchanged — leave blank to keep' if arr.sonarr_api_key else '' }}">
     </div>
-    <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Connection</button>
+    <div class="flex items-center gap-2">
+      <button type="submit" class="font-label-caps text-label-caps bg-primary text-on-primary px-4 py-2 rounded-DEFAULT hover:brightness-110 transition-all">Save Connection</button>
+      <span class="font-body-md text-[13px] text-on-surface-variant">Saving checks both connections.</span>
+    </div>
+  </form>
+  <form method="post" action="/settings/arr/test" class="mt-3 pt-3 border-t border-white/10">
+    <button type="submit" class="font-label-caps text-label-caps border border-white/10 text-on-surface-variant px-3 py-1.5 rounded-DEFAULT hover:bg-white/5 transition-colors">Test connections again</button>
   </form>
 </div>
 

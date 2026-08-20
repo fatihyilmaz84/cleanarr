@@ -125,3 +125,67 @@ async def test_build_index_returns_empty_when_unconfigured():
     index, warnings = await client.build_index()
     assert index == {}
     assert warnings == []
+
+
+# --- test_connection ---------------------------------------------------
+
+
+def _status_client(handler) -> ArrClient:
+    return ArrClient(
+        radarr_url="http://radarr:7878",
+        radarr_api_key="radarr-key",
+        sonarr_url="http://sonarr:8989",
+        sonarr_api_key="sonarr-key",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+    )
+
+
+@pytest.mark.asyncio
+async def test_test_connection_reports_the_version_on_success():
+    def handler(request):
+        assert request.url.path == "/api/v3/system/status"
+        assert request.headers["X-Api-Key"] == "radarr-key"
+        return httpx.Response(200, json={"version": "5.14.0.9383", "appName": "Radarr"})
+
+    result = await _status_client(handler).test_connection("radarr")
+    assert result.ok is True
+    assert result.detail == "v5.14.0.9383"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_calls_out_a_rejected_api_key_specifically():
+    # By far the most likely misconfiguration — a bare "401" wouldn't tell
+    # anyone which of the two fields to go and fix.
+    result = await _status_client(lambda request: httpx.Response(401, json={})).test_connection("sonarr")
+    assert result.ok is False
+    assert "API key" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_test_connection_reports_an_unreachable_service_without_raising():
+    def handler(request):
+        raise httpx.ConnectError("connection refused")
+
+    result = await _status_client(handler).test_connection("radarr")
+    assert result.ok is False
+    assert "Unreachable" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_test_connection_reports_a_url_that_is_not_an_arr_at_all():
+    result = await _status_client(lambda request: httpx.Response(200, text="<html>hello</html>")).test_connection(
+        "radarr"
+    )
+    assert result.ok is False
+    assert "URL" in result.detail
+
+
+@pytest.mark.asyncio
+async def test_test_connection_says_what_is_missing_when_unconfigured():
+    result = await ArrClient(radarr_url="http://radarr:7878").test_connection("radarr")
+    assert result.ok is False
+    assert result.detail == "No API key configured"
+
+    result = await ArrClient().test_connection("sonarr")
+    assert result.ok is False
+    assert result.detail == "No URL configured"

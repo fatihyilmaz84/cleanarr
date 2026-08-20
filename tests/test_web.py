@@ -499,3 +499,97 @@ def test_queue_run_and_remove(client: TestClient, media_dir: Path):
 
     assert len(client.get("/api/history").json()) == 1
     assert "Nothing queued" in client.get("/queue").text
+
+
+# --- Sonarr/Radarr connection check ------------------------------------
+
+
+def _arr_handler(radarr_ok=True, sonarr_ok=True):
+    import httpx
+
+    def handler(request):
+        ok = radarr_ok if "7878" in str(request.url) else sonarr_ok
+        if ok:
+            return httpx.Response(200, json={"version": "5.14.0", "appName": "Radarr"})
+        return httpx.Response(401, json={})
+
+    return handler
+
+
+def _patch_arr(monkeypatch, handler):
+    """Point the app's ArrClient factory at a mock transport."""
+    import httpx
+
+    from app import web as web_mod
+    from app.arr_client import ArrClient
+
+    def build(arr_config):
+        return ArrClient(
+            radarr_url=arr_config.radarr_url,
+            radarr_api_key=arr_config.radarr_api_key,
+            sonarr_url=arr_config.sonarr_url,
+            sonarr_api_key=arr_config.sonarr_api_key,
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        )
+
+    monkeypatch.setattr(web_mod, "build_arr_client", build)
+
+
+def test_settings_shows_not_checked_before_any_connection_test(client: TestClient):
+    # "never tested" must not look like "broken" — no red cross on a fresh
+    # install that simply hasn't been configured yet.
+    page = client.get("/settings").text
+    assert "Not checked yet" in page
+    assert "Connected" not in page
+
+
+def test_saving_the_connection_tests_it_and_shows_a_checkmark(client: TestClient, monkeypatch):
+    _patch_arr(monkeypatch, _arr_handler())
+    resp = client.post(
+        "/settings/arr",
+        data={
+            "radarr_url": "http://radarr:7878",
+            "radarr_api_key": "k1",
+            "sonarr_url": "http://sonarr:8989",
+            "sonarr_api_key": "k2",
+        },
+    )
+    assert "Radarr: OK" in resp.text
+    assert "Sonarr: OK" in resp.text
+
+    # And the checkmark persists on a later plain page load, without the
+    # page itself having to re-test.
+    page = client.get("/settings").text
+    assert page.count("Connected") == 2
+    assert "v5.14.0" in page
+
+
+def test_a_failing_connection_shows_why_rather_than_a_bare_cross(client: TestClient, monkeypatch):
+    _patch_arr(monkeypatch, _arr_handler(radarr_ok=True, sonarr_ok=False))
+    client.post(
+        "/settings/arr",
+        data={
+            "radarr_url": "http://radarr:7878",
+            "radarr_api_key": "k1",
+            "sonarr_url": "http://sonarr:8989",
+            "sonarr_api_key": "wrong",
+        },
+    )
+    page = client.get("/settings").text
+    assert "Connected" in page  # Radarr still fine
+    assert "Rejected the API key" in page
+
+
+def test_test_button_rechecks_a_single_service(client: TestClient, monkeypatch):
+    _patch_arr(monkeypatch, _arr_handler(sonarr_ok=False))
+    client.post(
+        "/settings/arr",
+        data={"radarr_url": "http://radarr:7878", "radarr_api_key": "k1",
+              "sonarr_url": "http://sonarr:8989", "sonarr_api_key": "wrong"},
+    )
+    # Sonarr comes good; re-testing just that one must not touch Radarr's result.
+    _patch_arr(monkeypatch, _arr_handler())
+    resp = client.post("/settings/arr/test", data={"service": "sonarr"})
+    assert "Sonarr: OK" in resp.text
+    assert "Radarr" not in resp.text.split("Sonarr: OK")[0][-80:]  # only sonarr was reported
+    assert client.get("/settings").text.count("Connected") == 2

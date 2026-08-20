@@ -6,6 +6,7 @@ Sonarr/Radarr connection info.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel, Field
 from sqlmodel import select
@@ -23,6 +24,7 @@ SCHEDULES_KEY = "schedules"
 NORMALIZER_CONFIG_KEY = "normalizer_config"
 RULE_PRESETS_KEY = "rule_presets"
 NORMALIZER_PRESETS_KEY = "normalizer_presets"
+ARR_STATUS_KEY = "arr_status"
 
 
 class ArrConfig(BaseModel):
@@ -168,6 +170,33 @@ async def get_arr_config(session: AsyncSession) -> ArrConfig:
 
 async def set_arr_config(session: AsyncSession, config: ArrConfig) -> None:
     await _set(session, ARR_CONFIG_KEY, config.model_dump())
+
+
+class ArrConnectionStatus(BaseModel):
+    """The last connection test result per service, so Settings can show a
+    checkmark on load without re-testing (and blocking the page render on
+    two network round trips) every time it's opened.
+    """
+
+    ok: bool = False
+    detail: str = ""
+    checked_at: datetime | None = None
+
+
+async def get_arr_status(session: AsyncSession) -> dict[str, ArrConnectionStatus]:
+    data = await _get(session, ARR_STATUS_KEY) or {}
+    return {
+        service: ArrConnectionStatus.model_validate(value)
+        for service, value in data.items()
+        if service in ("radarr", "sonarr")
+    }
+
+
+async def set_arr_status(session: AsyncSession, service: str, status: ArrConnectionStatus) -> None:
+    data = await _get(session, ARR_STATUS_KEY) or {}
+    data[service] = status.model_dump(mode="json")
+    await _set(session, ARR_STATUS_KEY, data)
+
 
 
 class DisplaySettings(BaseModel):

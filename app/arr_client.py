@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import asyncio
 import posixpath
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
 import httpx
@@ -35,6 +37,13 @@ class ArrMediaInfo:
     episode_number: int | None = None
     arr_id: int | None = None
     original_language: str | None = None  # e.g. "Korean" — Radarr/Sonarr's originalLanguage.name
+
+
+@dataclass(frozen=True)
+class ArrConnectionResult:
+    service: str  # "radarr" | "sonarr"
+    ok: bool
+    detail: str  # version string when ok, else why not — shown verbatim in Settings
 
 
 def normalize_path(path: str) -> str:
@@ -69,25 +78,50 @@ class ArrClient:
         self._injected_client = http_client
         self.timeout = timeout
 
-    async def _get(self, base_url: str, api_key: str, path: str, params: dict | None = None) -> object:
+    @asynccontextmanager
+    async def _session(self) -> AsyncIterator[httpx.AsyncClient]:
+        """One client for a whole index build, rather than one per request.
+
+        build_series_index issues a request per series — on a library with
+        hundreds of shows that used to mean hundreds of fresh AsyncClients,
+        each paying its own connection setup and throwing the connection
+        away afterwards. One client keeps the pool alive across them.
+        """
+        if self._injected_client is not None:
+            yield self._injected_client
+        else:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                yield client
+
+    async def _get(
+        self,
+        base_url: str,
+        api_key: str,
+        path: str,
+        params: dict | None = None,
+        client: httpx.AsyncClient | None = None,
+    ) -> object:
         headers = {"X-Api-Key": api_key}
         url = f"{base_url}{path}"
-        if self._injected_client is not None:
-            resp = await self._injected_client.get(url, headers=headers, params=params, timeout=self.timeout)
-        else:
-            async with httpx.AsyncClient() as client:
-                resp = await client.get(url, headers=headers, params=params, timeout=self.timeout)
+        if client is not None:
+            resp = await client.get(url, headers=headers, params=params, timeout=self.timeout)
+            resp.raise_for_status()
+            return resp.json()
+        async with self._session() as owned:
+            resp = await owned.get(url, headers=headers, params=params, timeout=self.timeout)
         resp.raise_for_status()
         return resp.json()
 
-    async def build_movie_index(self) -> tuple[dict[str, ArrMediaInfo], list[str]]:
+    async def build_movie_index(
+        self, client: httpx.AsyncClient | None = None
+    ) -> tuple[dict[str, ArrMediaInfo], list[str]]:
         if not (self.radarr_url and self.radarr_api_key):
             return {}, []
 
         warnings: list[str] = []
         index: dict[str, ArrMediaInfo] = {}
         try:
-            movies = await self._get(self.radarr_url, self.radarr_api_key, "/api/v3/movie")
+            movies = await self._get(self.radarr_url, self.radarr_api_key, "/api/v3/movie", client=client)
         except (httpx.HTTPError, ValueError) as e:
             return {}, [f"Radarr: failed to fetch movie list ({e})"]
 
@@ -114,12 +148,14 @@ class ArrClient:
             )
         return index, warnings
 
-    async def build_series_index(self) -> tuple[dict[str, ArrMediaInfo], list[str]]:
+    async def build_series_index(
+        self, client: httpx.AsyncClient | None = None
+    ) -> tuple[dict[str, ArrMediaInfo], list[str]]:
         if not (self.sonarr_url and self.sonarr_api_key):
             return {}, []
 
         try:
-            series_list = await self._get(self.sonarr_url, self.sonarr_api_key, "/api/v3/series")
+            series_list = await self._get(self.sonarr_url, self.sonarr_api_key, "/api/v3/series", client=client)
         except (httpx.HTTPError, ValueError) as e:
             return {}, [f"Sonarr: failed to fetch series list ({e})"]
 
@@ -138,6 +174,7 @@ class ArrClient:
                         self.sonarr_api_key,
                         "/api/v3/episodefile",
                         params={"seriesId": series.get("id")},
+                        client=client,
                     )
                 except (httpx.HTTPError, ValueError) as e:
                     return series, None, f"Sonarr: failed to fetch episode files for '{series_title}' ({e})"
@@ -172,12 +209,50 @@ class ArrClient:
                 )
         return index, warnings
 
+    async def test_connection(self, service: str) -> "ArrConnectionResult":
+        """Ask one service whether it's reachable and the API key works.
+
+        Uses /api/v3/system/status — the cheapest authenticated endpoint
+        both Sonarr and Radarr expose, so this stays a fast round trip
+        rather than pulling a whole library down just to prove reachability.
+        Never raises: an unreachable service is an answer, not an error.
+        """
+        if service == "radarr":
+            base_url, api_key = self.radarr_url, self.radarr_api_key
+        elif service == "sonarr":
+            base_url, api_key = self.sonarr_url, self.sonarr_api_key
+        else:
+            raise ValueError(f"unknown service '{service}'")
+
+        if not base_url or not api_key:
+            missing = "URL" if not base_url else "API key"
+            return ArrConnectionResult(service, False, f"No {missing} configured")
+
+        try:
+            status = await self._get(base_url, api_key, "/api/v3/system/status")
+        except httpx.HTTPStatusError as e:
+            # A wrong key is the single most likely misconfiguration, and
+            # "401" on its own doesn't tell anyone what to go fix.
+            if e.response.status_code in (401, 403):
+                return ArrConnectionResult(service, False, "Rejected the API key (401/403)")
+            return ArrConnectionResult(service, False, f"HTTP {e.response.status_code}")
+        except httpx.HTTPError as e:
+            return ArrConnectionResult(service, False, f"Unreachable ({type(e).__name__})")
+        except ValueError:
+            return ArrConnectionResult(service, False, "Responded, but not with valid JSON — is that really the URL?")
+
+        if not isinstance(status, dict):
+            return ArrConnectionResult(service, False, "Unexpected response shape")
+        version = status.get("version")
+        return ArrConnectionResult(service, True, f"v{version}" if version else "Connected")
+
     async def build_index(self) -> tuple[dict[str, ArrMediaInfo], list[str]]:
         """Merged path -> ArrMediaInfo lookup across Radarr + Sonarr, plus any
         non-fatal warnings (e.g. one service unreachable) collected along the
         way. Never raises for a single unreachable service — a scan should
         still proceed with degraded enrichment rather than fail entirely.
         """
-        movie_index, movie_warnings = await self.build_movie_index()
-        series_index, series_warnings = await self.build_series_index()
+        async with self._session() as client:
+            movie_index, movie_warnings = await self.build_movie_index(client=client)
+            series_index, series_warnings = await self.build_series_index(client=client)
         return {**movie_index, **series_index}, [*movie_warnings, *series_warnings]
