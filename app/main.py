@@ -19,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.actions import submit_apply_job, submit_scan_job
 from app.db import init_db, make_engine, make_session_factory
 from app.deps import get_session
-from app.jobs import JobManager
+from app.jobs import JobManager, job_status
 from app.models import ChangeStatus, PendingChange
 from app.queries import list_history_items, list_review_items, normalize_stats, overview_stats
 from app.rules import RuleConfig
@@ -197,19 +197,21 @@ async def status(request: Request, session: AsyncSession = Depends(get_session))
     """
     job_manager: JobManager = request.app.state.job_manager
     job = job_manager.current()
+    failed = job_manager.last_failed()
     stats = await overview_stats(session)
     norm_stats = await normalize_stats(session)
     return {
-        "job": None
-        if job is None
+        "job": None if job is None else job_status(job, job_manager.queued_count()),
+        # Reported alongside (not instead of) the active job: a failure that
+        # happened before the current job started still needs surfacing, and
+        # the client decides whether it has already been dismissed.
+        "last_error": None
+        if failed is None
         else {
-            "id": job.id,
-            "kind": job.kind,
-            "state": job.state.value,
-            "message": job.message,
-            "progress_current": job.progress_current,
-            "progress_total": job.progress_total,
-            "progress_fraction": job.progress_fraction,
+            "id": failed.id,
+            "kind": failed.kind,
+            "message": failed.message,
+            "finished_at": failed.finished_at.isoformat() if failed.finished_at else None,
         },
         "pending_review_count": stats["pending_review_count"],
         "queued_count": stats["queued_count"],

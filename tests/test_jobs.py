@@ -36,16 +36,97 @@ def test_current_returns_none_when_everything_is_finished():
     assert manager.current() is None
 
 
-def test_current_returns_the_most_recently_created_active_job():
+def test_current_prefers_the_running_job_over_a_newer_queued_one():
+    """A schedule submits its clean job and then its normalize job together.
+    Reporting the most recently created active job meant the topbar showed
+    the *queued* normalize job — with an empty progress bar — for the whole
+    duration of the scan that was actually running.
+    """
     manager = JobManager()
     now = datetime.now(timezone.utc)
-    manager._jobs["older-running"] = _job("older-running", JobState.running, now - timedelta(seconds=10))
-    manager._jobs["newer-queued"] = _job("newer-queued", JobState.queued, now)
+    manager._jobs["running-scan"] = _job("running-scan", JobState.running, now - timedelta(seconds=10))
+    manager._jobs["queued-normalize"] = _job("queued-normalize", JobState.queued, now)
     manager._jobs["finished"] = _job("finished", JobState.done, now + timedelta(seconds=5))
 
     current = manager.current()
     assert current is not None
-    assert current.id == "newer-queued"  # most recently created among active ones, finished ones ignored
+    assert current.id == "running-scan"
+
+
+def test_current_picks_the_oldest_queued_job_when_none_is_running_yet():
+    # Matches the order the single worker will actually take them in.
+    manager = JobManager()
+    now = datetime.now(timezone.utc)
+    manager._jobs["first"] = _job("first", JobState.queued, now)
+    manager._jobs["second"] = _job("second", JobState.queued, now + timedelta(seconds=1))
+
+    assert manager.current().id == "first"
+
+
+def test_queued_count_reports_work_waiting_behind_the_current_job():
+    manager = JobManager()
+    now = datetime.now(timezone.utc)
+    manager._jobs["running"] = _job("running", JobState.running, now)
+    manager._jobs["waiting"] = _job("waiting", JobState.queued, now)
+    manager._jobs["done"] = _job("done", JobState.done, now)
+
+    assert manager.queued_count() == 1
+
+
+def test_last_failed_surfaces_a_job_that_errored():
+    # current() only ever reports active jobs, so without this a scan that
+    # died left the UI showing "Idle" and no sign anything went wrong.
+    manager = JobManager()
+    now = datetime.now(timezone.utc)
+    old_failure = _job("old", JobState.error, now - timedelta(hours=1))
+    old_failure.finished_at = now - timedelta(hours=1)
+    recent = _job("recent", JobState.error, now)
+    recent.finished_at = now
+    recent.message = "ffprobe not found"
+    manager._jobs["old"] = old_failure
+    manager._jobs["recent"] = recent
+    manager._jobs["fine"] = _job("fine", JobState.done, now)
+
+    assert manager.last_failed().id == "recent"
+
+
+def test_eta_is_estimated_from_when_the_worker_started_not_when_queued():
+    """A job that sat behind another one for ten minutes hasn't been working
+    for ten minutes — measuring from created_at would say it had, and report
+    a wildly pessimistic ETA for the rest.
+    """
+    now = datetime.now(timezone.utc)
+    job = Job(id="j", kind="scan", state=JobState.running, created_at=now - timedelta(minutes=10))
+    job.started_at = now - timedelta(seconds=60)
+    job.progress_current = 25
+    job.progress_total = 100
+
+    assert job.elapsed_seconds == pytest.approx(60, abs=2)
+    # 25% took 60s, so the remaining 75% should take about 180s.
+    assert job.eta_seconds == pytest.approx(180, abs=10)
+
+
+def test_eta_is_unknown_until_there_is_something_to_divide_by():
+    now = datetime.now(timezone.utc)
+    job = Job(id="j", kind="scan", state=JobState.running)
+    job.started_at = now
+    assert job.eta_seconds is None  # no total yet
+
+    job.progress_total = 100
+    assert job.eta_seconds is None  # total, but nothing done yet
+
+
+def test_eta_counts_the_fraction_of_the_file_in_flight():
+    # A one-item apply job is 0/1 for the entire remux; without the fraction
+    # it could never report progress or an ETA at all.
+    now = datetime.now(timezone.utc)
+    job = Job(id="j", kind="apply", state=JobState.running)
+    job.started_at = now - timedelta(seconds=30)
+    job.progress_total = 1
+    job.progress_fraction = 0.5
+
+    assert job.progress_done == pytest.approx(0.5)
+    assert job.eta_seconds == pytest.approx(30, abs=5)
 
 
 def test_finished_jobs_are_pruned_beyond_the_cap():

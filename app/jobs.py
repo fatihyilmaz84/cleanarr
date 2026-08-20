@@ -46,7 +46,74 @@ class Job:
     # progress_current — e.g. how far a single large remux has gotten, so a
     # single-item apply job's bar isn't frozen at 0% for its whole duration.
     progress_fraction: float = 0.0
+    # Which stage of a multi-stage job is running. A scheduled run scans and
+    # then applies, resetting the counter in between — without this the bar
+    # just silently restarts from zero and looks like it lost its place.
+    phase: str = ""
+    # When the worker actually picked this job up. Distinct from created_at,
+    # which is when it was *queued*: a job that sat behind another one for
+    # ten minutes hasn't been working for ten minutes, and estimating a rate
+    # from created_at would say it had.
+    started_at: datetime | None = None
 
+    @property
+    def progress_done(self) -> float:
+        """Units completed, including the fraction of the one in flight."""
+        return self.progress_current + self.progress_fraction
+
+    @property
+    def elapsed_seconds(self) -> float | None:
+        if self.started_at is None:
+            return None
+        end = self.finished_at or datetime.now(timezone.utc)
+        return max((end - self.started_at).total_seconds(), 0.0)
+
+    @property
+    def eta_seconds(self) -> float | None:
+        """Rough seconds remaining, from the average rate so far — None until
+        there's enough to divide by.
+
+        Deliberately an average over the whole run rather than a recent-rate
+        estimate: a scan's per-file cost swings wildly (an unchanged file is
+        a stat, a changed one is an ffprobe), and a windowed rate makes the
+        number jump around far more than it informs.
+        """
+        elapsed = self.elapsed_seconds
+        done = self.progress_done
+        if not elapsed or self.progress_total <= 0 or done <= 0:
+            return None
+        remaining = self.progress_total - done
+        if remaining <= 0:
+            return 0.0
+        return remaining * (elapsed / done)
+
+
+def job_status(job: Job, queued_count: int) -> dict:
+    """The shape the topbar's progress bar consumes. Derived values (percent,
+    ETA) are computed here rather than in the browser so there is one
+    definition of them, and so they can be tested.
+    """
+    done = job.progress_done
+    percent = round(min(done / job.progress_total, 1.0) * 100, 1) if job.progress_total > 0 else None
+    return {
+        "id": job.id,
+        "kind": job.kind,
+        "state": job.state.value,
+        "phase": job.phase,
+        "message": job.message,
+        "progress_current": job.progress_current,
+        "progress_total": job.progress_total,
+        "progress_fraction": job.progress_fraction,
+        # None means "no total known yet" — the bar shows an indeterminate
+        # animation rather than sitting frozen at 0%, which is what a scan
+        # looks like while it is still walking the directory tree.
+        "percent": percent,
+        "elapsed_seconds": job.elapsed_seconds,
+        "eta_seconds": job.eta_seconds,
+        # Jobs waiting behind this one, so a schedule that queues two doesn't
+        # look like it finished when the first one ends.
+        "queued_behind": max(queued_count - (1 if job.state.value == "queued" else 0), 0),
+    }
 
 RunFn = Callable[[Job], Awaitable[None]]
 
@@ -90,13 +157,37 @@ class JobManager:
         return sorted(self._jobs.values(), key=lambda j: j.created_at, reverse=True)[:limit]
 
     def current(self) -> Job | None:
-        """The most recently created queued/running job, if any — the single
-        thing the UI needs to know to show a live progress indicator. Cheaper
-        than list_recent() for callers (like every page load) that only need
-        this, not the last 20 jobs' full detail.
+        """The job the UI should show progress for: the one actually running,
+        or failing that the one that will run next.
+
+        The running job wins over a newer queued one. A schedule submits its
+        clean job and then its normalize job together, so picking the most
+        recently created active job showed the *queued* normalize job — with
+        an empty progress bar — for the entire duration of the scan that was
+        really running. Among queued jobs the oldest wins, matching the order
+        the single worker will actually take them in.
         """
-        candidates = [j for j in self._jobs.values() if j.state in (JobState.queued, JobState.running)]
-        return max(candidates, key=lambda j: j.created_at, default=None)
+        running = [j for j in self._jobs.values() if j.state == JobState.running]
+        if running:
+            return max(running, key=lambda j: j.created_at)
+        queued = [j for j in self._jobs.values() if j.state == JobState.queued]
+        return min(queued, key=lambda j: j.created_at, default=None)
+
+    def queued_count(self) -> int:
+        """How many jobs are waiting behind the current one — worth showing,
+        since a schedule queues two and the second looks like nothing is
+        happening until the first finishes.
+        """
+        return sum(1 for j in self._jobs.values() if j.state == JobState.queued)
+
+    def last_failed(self) -> Job | None:
+        """The most recent job that ended in error, so a failure can be
+        surfaced instead of vanishing: current() only ever reports active
+        jobs, so a scan that died used to leave the UI showing a cheerful
+        "Idle" and no indication anything had gone wrong.
+        """
+        failed = [j for j in self._jobs.values() if j.state == JobState.error]
+        return max(failed, key=lambda j: j.finished_at or j.created_at, default=None)
 
     def _prune_finished(self) -> None:
         finished = [j for j in self._jobs.values() if j.state in (JobState.done, JobState.error)]
@@ -111,6 +202,7 @@ class JobManager:
             job_id, run = await self._queue.get()
             job = self._jobs[job_id]
             job.state = JobState.running
+            job.started_at = datetime.now(timezone.utc)
             try:
                 await run(job)
                 job.state = JobState.done

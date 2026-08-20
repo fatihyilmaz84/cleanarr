@@ -61,10 +61,32 @@
     .glass-panel-subtle { background-color: rgba(17, 17, 17, 0.5); border: 1px solid rgba(255, 255, 255, 0.05); }
     .floating-shadow { box-shadow: 0px 4px 12px rgba(0,0,0,0.5); }
     .grid-bg { background-image: linear-gradient(to right, rgba(255,255,255,0.02) 1px, transparent 1px), linear-gradient(to bottom, rgba(255,255,255,0.02) 1px, transparent 1px); background-size: 24px 24px; }
+    /* Tailwind's display utilities (.flex here) sit after preflight's
+       [hidden]{display:none} at equal specificity, so a flex container with
+       the hidden attribute stayed visible — which is why an idle topbar
+       still showed the running job's pulsing dot. */
+    [hidden] { display: none !important; }
     .status-dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; margin-right: 8px; }
     .status-healthy { background-color: #4edea3; box-shadow: 0 0 8px rgba(78, 222, 163, 0.4); }
     .status-warning { background-color: #ffb3ad; box-shadow: 0 0 8px rgba(255, 179, 173, 0.4); }
     .status-active { background-color: #adc6ff; box-shadow: 0 0 8px rgba(173, 198, 255, 0.5); }
+    /* Shown while a job has started but has no total to divide by yet — a
+       bar frozen at 0% reads as stalled, which is exactly wrong there. */
+    .progress-indeterminate {
+      width: 100% !important;
+      background-image: linear-gradient(90deg, transparent 0%, var(--tw-gradient-to, #adc6ff) 50%, transparent 100%);
+      background-size: 40% 100%;
+      background-repeat: no-repeat;
+      animation: progress-sweep 1.4s ease-in-out infinite;
+    }
+    @keyframes progress-sweep {
+      0%   { background-position: -60% 0; }
+      100% { background-position: 160% 0; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .progress-indeterminate { animation: none; background-position: 30% 0; }
+      .animate-pulse { animation: none; }
+    }
     .nav-active { border-left: 2px solid #adc6ff; background-color: rgba(173, 198, 255, 0.05); }
     .tech-border { border: 1px solid rgba(255,255,255,0.1); }
     .custom-scrollbar::-webkit-scrollbar { width: 6px; }
@@ -137,15 +159,24 @@
     <h1 class="font-headline-sm text-headline-sm text-on-surface">{% block page_title %}{% endblock %}</h1>
     <div class="flex items-center gap-6">
       <div class="flex items-center gap-3" id="job-status-running" {% if not current_job %}hidden{% endif %}>
-        <span class="status-dot status-active animate-pulse"></span>
-        <div class="flex flex-col gap-1 min-w-[180px]">
-          <span class="font-label-caps text-label-caps text-on-surface" id="job-status-label">
-            {% if current_job %}{{ current_job.kind|capitalize }} running&hellip;
-            {% if current_job.progress_total %}{{ current_job.progress_current }}/{{ current_job.progress_total }}{% endif %}
-            {% endif %}
-          </span>
-          <div class="w-full h-1.5 bg-white/10 rounded-full overflow-hidden" id="job-status-track" {% if not (current_job and current_job.progress_total) %}hidden{% endif %}>
-            <div class="h-full bg-primary transition-all" id="job-status-fill" style="width: {% if current_job and current_job.progress_total %}{{ (((current_job.progress_current + current_job.progress_fraction) / current_job.progress_total) * 100) | round(1) }}{% else %}0{% endif %}%"></div>
+        <span class="status-dot status-active animate-pulse flex-shrink-0"></span>
+        <div class="flex flex-col gap-1 w-[300px]">
+          <div class="flex items-baseline justify-between gap-3">
+            <span class="font-label-caps text-label-caps text-on-surface truncate" id="job-status-phase">{{ current_job.phase if current_job else "" }}</span>
+            <span class="font-code-md text-[11px] text-on-surface-variant flex-shrink-0 tabular-nums" id="job-status-counter">
+              {%- if current_job and current_job.percent is not none -%}
+              {{ current_job.progress_current }}/{{ current_job.progress_total }} · {{ current_job.percent }}%
+              {%- endif -%}
+            </span>
+          </div>
+          <div class="w-full h-2 bg-white/10 rounded-full overflow-hidden" id="job-status-track">
+            <div class="h-full bg-primary rounded-full transition-[width] duration-500 ease-out"
+                 id="job-status-fill"
+                 style="width: {{ current_job.percent if current_job and current_job.percent is not none else 0 }}%"></div>
+          </div>
+          <div class="flex items-baseline justify-between gap-3">
+            <span class="font-body-md text-[11px] text-on-surface-variant truncate" id="job-status-message" title="{{ current_job.message if current_job else '' }}">{{ current_job.message if current_job else "" }}</span>
+            <span class="font-code-md text-[11px] text-on-surface-variant flex-shrink-0 tabular-nums" id="job-status-eta"></span>
           </div>
         </div>
       </div>
@@ -163,6 +194,13 @@
   </header>
   <div class="flex-1 overflow-y-auto p-gutter custom-scrollbar">
     <div class="max-w-container-max mx-auto space-y-8 pb-16">
+      <div id="job-error" class="glass-panel rounded-lg px-4 py-3 border-l-2 border-l-tertiary flex items-start justify-between gap-4" hidden>
+        <div class="flex items-start gap-3 min-w-0">
+          <span class="material-symbols-outlined text-[18px] text-tertiary flex-shrink-0">error</span>
+          <p class="font-body-md text-body-md text-on-surface break-words" id="job-error-text"></p>
+        </div>
+        <button type="button" id="job-error-dismiss" class="font-label-caps text-label-caps text-on-surface-variant hover:text-on-surface flex-shrink-0">Dismiss</button>
+      </div>
       {% if messages %}
         <div class="space-y-2">
           {% for m in messages %}
@@ -174,69 +212,167 @@
     </div>
   </div>
 </main>
-{% if auto_refresh %}
 <script>
 (function () {
-  // A job was already running when this page was rendered — poll a small
-  // JSON endpoint to keep the topbar progress bar and nav badges live,
-  // instead of a full-page meta-refresh reload every 2s (which re-ran
-  // every query on the page, blew away scroll position and in-progress
-  // input, and re-triggered Tailwind's CDN JIT recompile on every single
-  // reload). Once the job actually finishes, reload once so the server
-  // renders whatever changed (new pending items, history).
+  // Polls a small JSON endpoint to keep the topbar progress bar and the nav
+  // badges live, instead of a full-page meta-refresh (which re-ran every
+  // query on the page, blew away scroll position and in-progress input, and
+  // re-triggered Tailwind's CDN JIT recompile on every reload).
+  //
+  // This runs on every page, not only ones rendered while a job was already
+  // active: schedules fire at times nobody is watching, and a page that only
+  // polls when it *started* busy shows a stale "Idle" for as long as it is
+  // left open. Idle polling is slow and backs off further when the tab is
+  // hidden, so an unattended tab is not hammering the box all night.
+  var ACTIVE_MS = 1500;
+  var IDLE_MS = 15000;
+  var HIDDEN_MS = 60000;
+  var wasActive = {{ "true" if current_job else "false" }};
+  var failures = 0;
+  var timer = null;
+
+  function el(id) { return document.getElementById(id); }
+
   function setBadge(id, value) {
-    var el = document.getElementById(id);
-    if (!el) return;
-    el.textContent = value;
-    el.classList.toggle("hidden", value === 0);
+    var node = el(id);
+    if (!node) return;
+    node.textContent = value;
+    node.classList.toggle("hidden", !value);
+  }
+
+  function formatDuration(seconds) {
+    if (seconds === null || seconds === undefined || !isFinite(seconds)) return "";
+    seconds = Math.max(0, Math.round(seconds));
+    if (seconds < 60) return seconds + "s";
+    var m = Math.floor(seconds / 60);
+    if (m < 60) return m + "m " + (seconds % 60) + "s";
+    var h = Math.floor(m / 60);
+    return h + "h " + (m % 60) + "m";
+  }
+
+  function render(job) {
+    var phase = el("job-status-phase");
+    var counter = el("job-status-counter");
+    var fill = el("job-status-fill");
+    var message = el("job-status-message");
+    var eta = el("job-status-eta");
+
+    if (phase) {
+      var label = job.phase || (job.kind.charAt(0).toUpperCase() + job.kind.slice(1).replace(/_/g, " "));
+      if (job.state === "queued") label = "Waiting to start — " + label;
+      phase.textContent = label;
+    }
+    if (counter) {
+      counter.textContent = job.percent === null ? "" :
+        job.progress_current + "/" + job.progress_total + " · " + job.percent + "%";
+    }
+    if (fill) {
+      // No total yet => sweep, rather than a bar sitting at 0% looking stuck.
+      var indeterminate = job.percent === null;
+      fill.classList.toggle("progress-indeterminate", indeterminate);
+      if (!indeterminate) fill.style.width = job.percent + "%";
+    }
+    if (message) {
+      var text = job.message || "";
+      if (job.queued_behind > 0) {
+        text = (text ? text + " · " : "") + job.queued_behind + " job(s) queued after this";
+      }
+      message.textContent = text;
+      message.title = text;
+    }
+    if (eta) {
+      eta.textContent = job.eta_seconds === null || job.eta_seconds === undefined
+        ? formatDuration(job.elapsed_seconds)
+        : formatDuration(job.eta_seconds) + " left";
+    }
+  }
+
+  function showError(err) {
+    var box = el("job-error");
+    if (!box || !err) return;
+    if (box.dataset.dismissedId === err.id) return;
+    el("job-error-text").textContent = err.kind + " failed: " + (err.message || "unknown error");
+    box.dataset.errorId = err.id;
+    box.hidden = false;
+  }
+
+  function apply(data) {
+    var running = el("job-status-running");
+    var idle = el("job-status-idle");
+    var active = !!data.job;
+
+    if (active) {
+      render(data.job);
+    } else if (wasActive) {
+      // A job just finished: reload once so the server re-renders whatever it
+      // produced (new pending items, history, reclaimed space).
+      window.location.reload();
+      return;
+    }
+    if (running) running.hidden = !active;
+    if (idle) idle.hidden = active;
+    wasActive = active;
+
+    showError(data.last_error);
+    setBadge("nav-badge-review", data.pending_review_count);
+    setBadge("nav-badge-queue", data.queued_count);
+    setBadge("nav-badge-normalize", data.normalize_pending_count);
+    setBadge("nav-badge-normalize-queue", data.normalize_queued_count);
+  }
+
+  function nextDelay(active) {
+    if (document.hidden) return HIDDEN_MS;
+    return active ? ACTIVE_MS : IDLE_MS;
+  }
+
+  function schedule(delay) {
+    clearTimeout(timer);
+    timer = setTimeout(poll, delay);
   }
 
   function poll() {
-    fetch("/api/status")
+    fetch("/api/status", { headers: { "Accept": "application/json" } })
       .then(function (resp) {
         if (!resp.ok) throw new Error("status " + resp.status);
         return resp.json();
       })
       .then(function (data) {
-        if (!data.job) {
+        failures = 0;
+        apply(data);
+        schedule(nextDelay(!!data.job));
+      })
+      .catch(function () {
+        // A blip (container restart mid-scan, a dropped wifi packet) is not a
+        // reason to throw away the page the user is looking at. Back off and
+        // retry; only give up after several consecutive failures.
+        failures += 1;
+        if (failures >= 5) {
           window.location.reload();
           return;
         }
-
-        var label = document.getElementById("job-status-label");
-        if (label) {
-          var text = data.job.kind.charAt(0).toUpperCase() + data.job.kind.slice(1) + " running…";
-          if (data.job.progress_total) text += " " + data.job.progress_current + "/" + data.job.progress_total;
-          label.textContent = text;
-        }
-
-        var track = document.getElementById("job-status-track");
-        var fill = document.getElementById("job-status-fill");
-        if (data.job.progress_total) {
-          if (track) track.hidden = false;
-          if (fill) {
-            var pct = ((data.job.progress_current + data.job.progress_fraction) / data.job.progress_total) * 100;
-            fill.style.width = pct.toFixed(1) + "%";
-          }
-        } else if (track) {
-          track.hidden = true;
-        }
-
-        setBadge("nav-badge-review", data.pending_review_count);
-        setBadge("nav-badge-queue", data.queued_count);
-        setBadge("nav-badge-normalize", data.normalize_pending_count);
-        setBadge("nav-badge-normalize-queue", data.normalize_queued_count);
-
-        setTimeout(poll, 2000);
-      })
-      .catch(function () {
-        window.location.reload(); // fall back to the pre-JS behavior on any failure
+        schedule(Math.min(ACTIVE_MS * Math.pow(2, failures), HIDDEN_MS));
       });
   }
 
-  setTimeout(poll, 2000);
+  // Coming back to a backgrounded tab should refresh immediately rather than
+  // showing minute-old state until the slow timer next fires.
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) schedule(0);
+  });
+
+  var dismiss = el("job-error-dismiss");
+  if (dismiss) {
+    dismiss.addEventListener("click", function () {
+      var box = el("job-error");
+      // Remembered by id, so dismissing one failure doesn't also hide the
+      // next, different one that comes along.
+      box.dataset.dismissedId = box.dataset.errorId || "";
+      box.hidden = true;
+    });
+  }
+
+  schedule(wasActive ? ACTIVE_MS : IDLE_MS);
 })();
 </script>
-{% endif %}
 </body>
 </html>

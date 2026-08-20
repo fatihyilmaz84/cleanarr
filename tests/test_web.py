@@ -138,17 +138,76 @@ def test_topbar_shows_progress_bar_for_running_job(client: TestClient):
 
     page = client.get("/").text
     assert "3/10" in page
+    assert "30.0%" in page
     assert "width: 30.0%" in page
     # Live progress is JS-polled (fetch('/api/status')) instead of a full
     # page teardown/rebuild every 2s — see app/templates/base.html.
     assert "<meta http-equiv=\"refresh\"" not in page
-    assert "fetch(\"/api/status\")" in page
+    assert "fetch(\"/api/status\"" in page
 
 
-def test_topbar_has_no_polling_script_when_idle(client: TestClient):
+def test_an_idle_page_still_polls_so_a_scheduled_job_shows_up(client: TestClient):
+    """Schedules fire at 03:00 with nobody watching. A page that only polled
+    when it happened to be rendered mid-job showed a stale "Idle" for as long
+    as it was left open, and never displayed the run at all.
+    """
     page = client.get("/").text
-    assert "fetch(\"/api/status\")" not in page
+    assert "fetch(\"/api/status\"" in page
     assert "<meta http-equiv=\"refresh\"" not in page
+
+
+def test_the_progress_bar_is_indeterminate_before_a_total_is_known(client: TestClient):
+    # A scan walking the directory tree has no total yet. Reporting percent
+    # as null lets the bar sweep instead of sitting at 0% looking stalled.
+    job_manager = client.app.state.job_manager
+    job = Job(id="counting", kind="scan", state=JobState.running)
+    job_manager._jobs[job.id] = job
+
+    assert client.get("/api/status").json()["job"]["percent"] is None
+    assert "progress-indeterminate" in client.get("/").text  # the CSS is present to switch to
+
+
+def test_topbar_shows_the_phase_of_a_multi_stage_job(client: TestClient):
+    # A scheduled run scans and then applies, resetting the counter in
+    # between; without a phase the bar just silently restarts from zero.
+    job_manager = client.app.state.job_manager
+    job = Job(id="applying", kind="scan", state=JobState.running, progress_current=2, progress_total=8)
+    job.phase = "Removing tracks"
+    job_manager._jobs[job.id] = job
+
+    assert "Removing tracks" in client.get("/").text
+    assert client.get("/api/status").json()["job"]["phase"] == "Removing tracks"
+
+
+def test_status_surfaces_the_last_failed_job(client: TestClient):
+    # current() only reports active jobs, so a failure used to vanish and
+    # leave the UI showing a cheerful "Idle".
+    import datetime as _dt
+
+    job_manager = client.app.state.job_manager
+    job = Job(id="boom", kind="scan", state=JobState.error, message="ffprobe not found")
+    job.finished_at = _dt.datetime.now(_dt.timezone.utc)
+    job_manager._jobs[job.id] = job
+
+    err = client.get("/api/status").json()["last_error"]
+    assert err["kind"] == "scan"
+    assert err["message"] == "ffprobe not found"
+    assert "job-error" in client.get("/").text  # the banner it renders into
+
+
+def test_status_reports_a_job_queued_behind_the_running_one(client: TestClient):
+    import datetime as _dt
+
+    job_manager = client.app.state.job_manager
+    now = _dt.datetime.now(_dt.timezone.utc)
+    running = Job(id="clean", kind="scan", state=JobState.running, created_at=now)
+    queued = Job(id="norm", kind="normalize_scan", state=JobState.queued, created_at=now + _dt.timedelta(seconds=1))
+    job_manager._jobs[running.id] = running
+    job_manager._jobs[queued.id] = queued
+
+    status = client.get("/api/status").json()
+    assert status["job"]["id"] == "clean"  # the one actually running, not the newer queued one
+    assert status["job"]["queued_behind"] == 1
 
 
 def test_full_ui_scan_review_approve_flow(client: TestClient, media_dir: Path):
@@ -593,3 +652,13 @@ def test_test_button_rechecks_a_single_service(client: TestClient, monkeypatch):
     assert "Sonarr: OK" in resp.text
     assert "Radarr" not in resp.text.split("Sonarr: OK")[0][-80:]  # only sonarr was reported
     assert client.get("/settings").text.count("Connected") == 2
+
+
+def test_hidden_attribute_actually_hides_flex_containers(client: TestClient):
+    """Tailwind's .flex utility sits after preflight's [hidden]{display:none}
+    at equal specificity, so the topbar's flex containers stayed visible even
+    with the attribute set — an idle page still rendered the running job's
+    pulsing dot, and the error banner showed up empty.
+    """
+    page = client.get("/").text
+    assert "[hidden] { display: none !important; }" in page

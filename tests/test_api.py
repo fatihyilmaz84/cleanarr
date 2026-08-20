@@ -141,15 +141,15 @@ def test_status_surfaces_a_running_job(client: TestClient):
     job_manager._jobs[job.id] = job
 
     status = client.get("/api/status").json()
-    assert status["job"] == {
-        "id": "fake-job",
-        "kind": "apply",
-        "state": "running",
-        "message": "",
-        "progress_current": 3,
-        "progress_total": 10,
-        "progress_fraction": 0.0,
-    }
+    assert status["job"]["id"] == "fake-job"
+    assert status["job"]["kind"] == "apply"
+    assert status["job"]["state"] == "running"
+    assert (status["job"]["progress_current"], status["job"]["progress_total"]) == (3, 10)
+    assert status["job"]["percent"] == 30.0
+    # Never picked up by the worker in this test, so there is no rate to
+    # extrapolate from and the ETA must be absent rather than guessed at.
+    assert status["job"]["eta_seconds"] is None
+    assert status["last_error"] is None
 
 
 def test_settings_roundtrip(client: TestClient):

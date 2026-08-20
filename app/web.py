@@ -19,7 +19,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.actions import build_arr_client, submit_apply_job, submit_scan_job
 from app.deps import get_session
-from app.jobs import JobManager
+from app.jobs import JobManager, job_status
 from app.languages import LANGUAGE_OPTIONS, iso_codes_for_language_name
 from app.models import ChangeStatus, PendingChange
 from app.queries import list_history_items, list_review_items, normalize_stats, overview_stats
@@ -71,17 +71,14 @@ templates.env.filters["localtime"] = _localtime
 
 
 def _current_job(job_manager: JobManager) -> dict | None:
+    """First-paint copy of what /api/status streams — same shape, so the
+    server-rendered bar and the polled one can't disagree about a job that
+    was already running when the page was requested.
+    """
     job = job_manager.current()
     if job is None:
         return None
-    return {
-        "kind": job.kind,
-        "state": job.state.value,
-        "progress_current": job.progress_current,
-        "progress_total": job.progress_total,
-        "progress_fraction": job.progress_fraction,
-        "message": job.message,
-    }
+    return job_status(job, job_manager.queued_count())
 
 
 async def _base_context(request: Request, session: AsyncSession) -> dict:
@@ -98,7 +95,6 @@ async def _base_context(request: Request, session: AsyncSession) -> dict:
         "normalize_pending_count": norm_stats["pending_count"],
         "normalize_queued_count": norm_stats["queued_count"],
         "current_job": current_job,
-        "auto_refresh": current_job is not None,
         "messages": [msg] if msg else [],
         "display_timezone": display_settings.timezone,
         "_overview_stats": stats,  # let ui_overview reuse this instead of re-querying
