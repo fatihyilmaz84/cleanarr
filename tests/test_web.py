@@ -662,3 +662,16 @@ def test_hidden_attribute_actually_hides_flex_containers(client: TestClient):
     """
     page = client.get("/").text
     assert "[hidden] { display: none !important; }" in page
+
+
+def test_page_reloads_when_work_completed_unseen(client: TestClient, media_dir: Path):
+    """A scheduled job can start and finish entirely while a tab sits in the
+    background on the slow poll. wasActive never flips in that case, so the
+    reload-on-finish never fires and the page keeps showing the counts it was
+    rendered with. The script compares against those counts to notice.
+    """
+    page = client.get("/").text
+    assert "renderedCounts" in page
+    assert "countsMoved" in page
+    # Rendered with the real current values, so a later poll can diff them.
+    assert "var renderedCounts = [\n    0,\n    0,\n    0,\n    0\n  ];" in page.replace("\r\n", "\n")

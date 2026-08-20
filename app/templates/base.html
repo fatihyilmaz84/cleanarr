@@ -228,6 +228,24 @@
   var IDLE_MS = 15000;
   var HIDDEN_MS = 60000;
   var wasActive = {{ "true" if current_job else "false" }};
+  // What the server actually rendered into this page. If a job runs to
+  // completion while the tab is hidden, wasActive never flips and the
+  // reload-on-finish never fires — the page would sit on stale counts and
+  // stale Recent Activity indefinitely. Comparing against these catches
+  // that: work happened, and what is on screen no longer reflects it.
+  var renderedCounts = [
+    {{ pending_review_count or 0 }},
+    {{ queued_count or 0 }},
+    {{ normalize_pending_count or 0 }},
+    {{ normalize_queued_count or 0 }}
+  ];
+
+  function countsMoved(data) {
+    return renderedCounts[0] !== data.pending_review_count
+      || renderedCounts[1] !== data.queued_count
+      || renderedCounts[2] !== data.normalize_pending_count
+      || renderedCounts[3] !== data.normalize_queued_count;
+  }
   var failures = 0;
   var timer = null;
 
@@ -303,9 +321,10 @@
 
     if (active) {
       render(data.job);
-    } else if (wasActive) {
-      // A job just finished: reload once so the server re-renders whatever it
-      // produced (new pending items, history, reclaimed space).
+    } else if (wasActive || countsMoved(data)) {
+      // A job just finished — or finished unseen while this tab was hidden.
+      // Either way, reload once so the server re-renders what it produced
+      // (new pending items, history, reclaimed space).
       window.location.reload();
       return;
     }
