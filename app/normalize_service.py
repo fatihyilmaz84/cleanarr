@@ -20,7 +20,13 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.analyzer import AnalyzerError, MediaStream, probe_file
 from app.mkv_metadata import MkvMetadataError, apply_metadata_changes, is_mkv
 from app.models import ChangeStatus, MediaFile, NormalizationChange, PendingChange, StreamRecord
-from app.normalizer import NormalizerConfig, TrackNormalization, apply_overrides, normalize_streams
+from app.normalizer import (
+    SKIPPED_PENDING_REMOVAL,
+    NormalizerConfig,
+    TrackNormalization,
+    apply_overrides,
+    normalize_streams,
+)
 
 
 def _now():
@@ -196,7 +202,7 @@ async def propose_normalizations(
         all_streams = [_stream_from_record(r) for r in records]
         dropped = _dropped_indices_from_change(pending_change_by_file.get(media_file.id))
         normalizations = normalize_streams(all_streams, config)
-        normalizations = apply_overrides(normalizations, sorted(dropped))
+        normalizations = apply_overrides(normalizations, sorted(dropped), reason=SKIPPED_PENDING_REMOVAL)
         changed = [n for n in normalizations if n.changed]
 
         existing = existing_norm_by_file.get(media_file.id)

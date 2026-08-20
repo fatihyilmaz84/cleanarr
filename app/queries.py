@@ -9,6 +9,7 @@ from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import ChangeStatus, HistoryEntry, MediaFile, NormalizationChange, PendingChange
+from app.normalizer import SKIPPED_BY_USER, SKIPPED_PENDING_REMOVAL
 
 
 def _effective_review(change: PendingChange, mf: MediaFile | None) -> dict:
@@ -137,6 +138,25 @@ def _describe_normalization(p: dict) -> str:
     return ", ".join(parts) or "no change"
 
 
+def _unchanged_note(p: dict) -> str:
+    """Short label for a track the normalizer left alone. "unchanged" is
+    true of all of them but explains none: a track the cleaner is about to
+    delete, one the user skipped, and one already correctly named are three
+    different situations, and lumping them together made a proposal look
+    like the normalizer had simply failed on those languages.
+    """
+    reason = p.get("reason") or ""
+    if reason == SKIPPED_PENDING_REMOVAL:
+        return "queued for removal"
+    if reason == SKIPPED_BY_USER:
+        return "you skipped this"
+    if "identical to another track" in reason:
+        return "kept, renaming would duplicate another track"
+    if "not recognized" in reason or "no language tag" in reason:
+        return "no usable language tag"
+    return "already correct"
+
+
 def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> dict:
     overrides = set(change.overrides or [])
     effective = [
@@ -151,7 +171,7 @@ def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> d
         "status": change.status.value,
         "proposed": change.proposed,
         "changes": [{**p, "summary": _describe_normalization(p)} for p in effective if p["changed"]],
-        "unchanged": [p for p in effective if not p["changed"]],
+        "unchanged": [{**p, "note": _unchanged_note(p)} for p in effective if not p["changed"]],
         "error_message": change.error_message,
         "created_at": change.created_at,
         # When this proposal was last recomputed. A normalize pass only runs

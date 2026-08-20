@@ -360,10 +360,25 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
     return results
 
 
-def apply_overrides(normalizations: list[TrackNormalization], skip_indices: list[int] | None) -> list[TrackNormalization]:
+SKIPPED_BY_USER = "skipped by user override"
+SKIPPED_PENDING_REMOVAL = "this track is queued for removal by the cleaner, so there is nothing to rename"
+
+
+def apply_overrides(
+    normalizations: list[TrackNormalization],
+    skip_indices: list[int] | None,
+    reason: str = SKIPPED_BY_USER,
+) -> list[TrackNormalization]:
     """Force a stream to `changed=False` (skip it) regardless of what was
     proposed — mirrors app/rules.py::apply_overrides in shape, but here an
     override means "don't touch this track" rather than "force-keep it".
+
+    `reason` is what the UI shows for the skipped track, and there are two
+    genuinely different reasons a track gets skipped: the user said not to
+    touch it, or the drop engine is about to delete it (see
+    app/normalize_service.py). Reporting the second as the first made a
+    proposal look like the normalizer had failed on every language the
+    cleaner happened to be removing.
     """
     if not skip_indices:
         return normalizations
@@ -375,7 +390,7 @@ def apply_overrides(normalizations: list[TrackNormalization], skip_indices: list
             new_language=n.old_language,
             new_default=None,
             changed=False,
-            reason="skipped by user override",
+            reason=reason,
         )
         if n.index in skip_set
         else n

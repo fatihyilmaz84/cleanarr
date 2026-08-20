@@ -228,3 +228,40 @@ def test_a_default_flag_change_is_described_as_such_not_as_a_no_op(client: TestC
     assert _describe_normalization(
         {"old_title": None, "new_title": "English", "old_default": True, "new_default": True}
     ) == '"" → "English"'
+
+
+def test_a_track_the_cleaner_will_delete_says_so_rather_than_just_unchanged():
+    """The normalizer deliberately skips renaming a track the drop engine is
+    about to remove. That was reported as "skipped by user override" and
+    rendered as plain "(unchanged)", so a library whose rules keep only a few
+    languages showed every other subtitle as untouched — indistinguishable
+    from the normalizer failing on those languages, which is what it looked
+    like on a real 42-track file.
+    """
+    from app.normalizer import SKIPPED_BY_USER, SKIPPED_PENDING_REMOVAL
+    from app.queries import _unchanged_note
+
+    assert _unchanged_note({"reason": SKIPPED_PENDING_REMOVAL}) == "queued for removal"
+    assert _unchanged_note({"reason": SKIPPED_BY_USER}) == "you skipped this"
+    assert _unchanged_note({"reason": "already normalized"}) == "already correct"
+    assert _unchanged_note({"reason": "no language tag, left untouched"}) == "no usable language tag"
+    assert (
+        _unchanged_note({"reason": "renaming to 'Chinese' would make this identical to another track ..."})
+        == "kept, renaming would duplicate another track"
+    )
+
+
+def test_the_two_skip_reasons_are_not_reported_as_the_same_thing():
+    from app.normalizer import SKIPPED_BY_USER, SKIPPED_PENDING_REMOVAL, apply_overrides
+    from tests.fixtures import make_stream
+    from app.normalizer import NormalizerConfig, normalize_streams
+
+    streams = [make_stream(1, "subtitle", codec_name="subrip", language="dan", title="dansk")]
+    proposed = normalize_streams(streams, NormalizerConfig())
+
+    user = apply_overrides(proposed, [1])
+    cleaner = apply_overrides(proposed, [1], reason=SKIPPED_PENDING_REMOVAL)
+
+    assert user[0].reason == SKIPPED_BY_USER
+    assert cleaner[0].reason == SKIPPED_PENDING_REMOVAL
+    assert user[0].changed is False and cleaner[0].changed is False
