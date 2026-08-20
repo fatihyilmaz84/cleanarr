@@ -115,6 +115,28 @@ async def overview_stats(session: AsyncSession) -> dict:
     }
 
 
+def _describe_normalization(p: dict) -> str:
+    """What this track's proposed change actually does, in words.
+
+    The Normalize page used to render every change as
+    `"<old title>" -> "<new title>"`, which for a change that only sets the
+    default flag reads as `"English" -> "English"` — a pointless no-op that
+    makes the whole proposal look broken, when what it really does is mark
+    that track as the default.
+    """
+    parts = []
+    old_title = p.get("old_title") or ""
+    new_title = p.get("new_title") or ""
+    if old_title != new_title:
+        parts.append(f'"{old_title}" → "{new_title}"')
+
+    new_default = p.get("new_default")
+    if new_default is not None and bool(new_default) != bool(p.get("old_default")):
+        parts.append("set as default" if new_default else "no longer default")
+
+    return ", ".join(parts) or "no change"
+
+
 def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> dict:
     overrides = set(change.overrides or [])
     effective = [
@@ -128,10 +150,15 @@ def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> d
         "library_type": mf.library_type.value if mf else None,
         "status": change.status.value,
         "proposed": change.proposed,
-        "changes": [p for p in effective if p["changed"]],
+        "changes": [{**p, "summary": _describe_normalization(p)} for p in effective if p["changed"]],
         "unchanged": [p for p in effective if not p["changed"]],
         "error_message": change.error_message,
         "created_at": change.created_at,
+        # When this proposal was last recomputed. A normalize pass only runs
+        # on demand or from a schedule with Normalize enabled, so a proposal
+        # can be arbitrarily old — and one computed under an older build can
+        # look plainly wrong next to what the current normalizer would say.
+        "updated_at": change.updated_at,
     }
 
 

@@ -201,3 +201,30 @@ def test_remove_from_normalize_queue_reverts_to_pending(client: TestClient, tmp_
     client.post(f"/normalize/queue/{pending_id}/remove")
     assert "Nothing queued" in client.get("/normalize/queue").text
     assert "Add to Normalize Queue" in client.get("/normalize").text
+
+
+def test_a_default_flag_change_is_described_as_such_not_as_a_no_op(client: TestClient):
+    """A change that only sets the default flag rendered as
+    `subtitle: "English" -> "English"` — a pointless-looking no-op that makes
+    the whole proposal look broken, when what it does is mark that track as
+    the default.
+    """
+    from app.queries import _describe_normalization
+
+    assert _describe_normalization(
+        {"old_title": "English", "new_title": "English", "old_default": False, "new_default": True}
+    ) == "set as default"
+
+    assert _describe_normalization(
+        {"old_title": "English (SDH)", "new_title": "English - SDH", "old_default": False, "new_default": False}
+    ) == '"English (SDH)" → "English - SDH"'
+
+    # Both at once reads as one line, not two contradictory ones.
+    assert _describe_normalization(
+        {"old_title": "eng", "new_title": "English", "old_default": False, "new_default": True}
+    ) == '"eng" → "English", set as default'
+
+    # An untitled track gaining a title still reads correctly.
+    assert _describe_normalization(
+        {"old_title": None, "new_title": "English", "old_default": True, "new_default": True}
+    ) == '"" → "English"'

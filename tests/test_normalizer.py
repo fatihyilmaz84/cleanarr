@@ -184,3 +184,52 @@ def test_apply_overrides_handles_none_and_empty():
     normalizations = normalize_streams(streams, NormalizerConfig())
     assert apply_overrides(normalizations, None) == normalizations
     assert apply_overrides(normalizations, []) == normalizations
+
+
+def test_distinct_titles_are_not_collapsed_into_identical_ones():
+    """Three Chinese subtitle tracks labelled 廣東話 / 中文（繁體） / 中文（简体）
+    all carry the same ISO code, so they all normalize to "Chinese" — and
+    nothing intrinsic (no channel count on a subtitle, same codec) can
+    disambiguate them. Renaming would leave a track picker showing three
+    identical entries, having destroyed the only thing that told them apart.
+    """
+    streams = [
+        make_stream(0, "video", codec_name="h264", language=None),
+        make_stream(1, "subtitle", codec_name="subrip", language="chi", title="廣東話"),
+        make_stream(2, "subtitle", codec_name="subrip", language="chi", title="中文（繁體）"),
+        make_stream(3, "subtitle", codec_name="subrip", language="chi", title="中文（简体）"),
+    ]
+
+    results = {n.index: n for n in normalize_streams(streams, NormalizerConfig())}
+
+    for index, original in [(1, "廣東話"), (2, "中文（繁體）"), (3, "中文（简体）")]:
+        assert results[index].changed is False
+        assert results[index].new_title == original
+        assert "identical to another track" in results[index].reason
+
+
+def test_identical_titles_are_still_normalized_together():
+    # Nothing is lost here — the two tracks were already indistinguishable,
+    # so collapsing them to the same canonical name destroys no information.
+    streams = [
+        make_stream(1, "subtitle", codec_name="subrip", language="spa", title="español"),
+        make_stream(2, "subtitle", codec_name="subrip", language="spa", title="español"),
+    ]
+
+    results = normalize_streams(streams, NormalizerConfig())
+
+    assert [n.new_title for n in results] == ["Spanish", "Spanish"]
+    assert all(n.changed for n in results)
+
+
+def test_a_group_that_can_be_disambiguated_still_is():
+    # 5.1 vs stereo separates these, so they get suffixes rather than being
+    # left alone — the existing behaviour must not regress.
+    streams = [
+        make_stream(1, "audio", codec_name="ac3", language="eng", channels=6),
+        make_stream(2, "audio", codec_name="ac3", language="eng", channels=2),
+    ]
+
+    results = normalize_streams(streams, NormalizerConfig())
+
+    assert [n.new_title for n in results] == ["English - 5.1", "English - Stereo"]

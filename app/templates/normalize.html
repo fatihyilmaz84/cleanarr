@@ -17,6 +17,9 @@
       <div>
         <h3 class="font-body-lg text-body-lg text-on-surface">{{ item.display_title or item.path }}</h3>
         <p class="font-code-md text-[11px] text-on-surface-variant mt-1">{{ item.path }}</p>
+        {% if item.updated_at %}
+        <p class="font-code-md text-[11px] text-on-surface-variant/70 mt-0.5">Proposed {{ (item.updated_at | localtime(display_timezone)).strftime("%b %d, %H:%M") }} — re-scan to recompute against your current settings.</p>
+        {% endif %}
       </div>
       <span class="font-label-caps text-label-caps px-2 py-1 rounded-full border border-white/10 text-on-surface-variant h-fit">{{ item.library_type }}</span>
     </div>
@@ -32,7 +35,7 @@
         {% for c in item.changes %}
           <label class="flex items-center gap-1.5 font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded cursor-pointer hover:bg-secondary/20 transition-colors" title="{{ c.reason }}">
             <input type="checkbox" name="change_index" value="{{ c.index }}" checked class="rounded-sm border-white/20 bg-[#050505] text-secondary focus:ring-secondary h-3 w-3">
-            {{ c.codec_type }}: &quot;{{ c.old_title or '' }}&quot; &rarr; &quot;{{ c.new_title }}&quot;
+            {{ c.codec_type }}: {{ c.summary }}
           </label>
         {% endfor %}
         {% for c in item.unchanged %}

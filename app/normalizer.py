@@ -273,16 +273,51 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
         groups.setdefault((stream.codec_type, _build_title(name, attrs, config.naming_style)), []).append(stream)
 
     suffix_by_index: dict[int, str] = {}
+    collapse_would_lose_detail: set[int] = set()
     for group in groups.values():
         if len(group) < 2:
             continue
         suffixes = [_disambiguator(s) for s in group]
-        if any(s is None for s in suffixes) or len(set(suffixes)) != len(group):
+        if suffixes.count(None) == 0 and len(set(suffixes)) == len(group):
+            for stream, suffix in zip(group, suffixes):
+                suffix_by_index[stream.index] = suffix
             continue
-        for stream, suffix in zip(group, suffixes):
-            suffix_by_index[stream.index] = suffix
+
+        # Nothing intrinsic separates these tracks, so renaming them all
+        # would produce identical titles. When their *existing* titles are
+        # distinct, that is not a cosmetic tie — it is information the file
+        # already carries and the rename would destroy: three Chinese
+        # subtitle tracks labelled 廣東話 / 中文（繁體） / 中文（简体） all
+        # collapse to "Chinese", as do Español (España) and Español
+        # (Latinoamérica), leaving a track picker that cannot tell them
+        # apart at all. Leave those alone; an imperfect existing label beats
+        # three identical ones.
+        old_titles = [s.title for s in group]
+        if all(t for t in old_titles) and len(set(old_titles)) == len(group):
+            collapse_would_lose_detail.update(s.index for s in group)
 
     for stream, track_selector, language_name, attributes in planned:
+        if stream.index in collapse_would_lose_detail:
+            results.append(
+                TrackNormalization(
+                    index=stream.index,
+                    codec_type=stream.codec_type,
+                    track_selector=track_selector,
+                    old_title=stream.title,
+                    new_title=stream.title or "",
+                    old_language=stream.language,
+                    new_language=stream.language,
+                    old_default=stream.is_default,
+                    new_default=None,
+                    changed=False,
+                    reason=(
+                        f"renaming to '{_build_title(language_name, attributes, config.naming_style)}' would make this "
+                        "identical to another track that currently has its own distinct title, left untouched"
+                    ),
+                )
+            )
+            continue
+
         suffix = suffix_by_index.get(stream.index)
         if suffix is not None:
             attributes = [*attributes, suffix]
