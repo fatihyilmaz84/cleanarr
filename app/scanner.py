@@ -20,7 +20,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.analyzer import AnalyzerError, MediaProbe, MediaStream, probe_file
 from app.arr_client import ArrClient, ArrMediaInfo, normalize_path
-from app.models import ChangeStatus, LibraryType, MediaFile, PendingChange, StreamRecord
+from app.models import ChangeStatus, LibraryType, MediaFile, NormalizationChange, PendingChange, StreamRecord
 from app.rules import RuleConfig, decide
 from app.settings_store import MediaPath
 
@@ -78,9 +78,14 @@ def _iter_media_files(root: Path):
       (app/remux.py). Normally cleaned up, but a container killed mid-remux
       leaves one behind, and picking it up would mean proposing changes
       against a half-written file.
+
+    Every path component is checked, not just the filename: SMB shares grow
+    a `.Trash-1000/` recycle bin, and the media inside it is deleted media —
+    scanning it would propose work on files the user already threw away, and
+    remuxing one would resurrect it as a write.
     """
     for path in sorted(root.rglob("*")):
-        if path.name.startswith("."):
+        if any(part.startswith(".") for part in path.relative_to(root).parts):
             continue
         if path.is_file() and path.suffix.lower() in MEDIA_EXTENSIONS:
             yield path
@@ -130,6 +135,8 @@ async def run_scan(
 
     summary.files_total = len(work_items)
 
+    await _forget_hidden_files(session, media_paths)
+
     for file_path, library_type in work_items:
         # Checked between files, never mid-file — a probe is read-only and
         # quick, so there's no unsafe "abort partway through" state to worry
@@ -158,6 +165,39 @@ async def run_scan(
 
     await session.commit()
     return summary
+
+
+async def _forget_hidden_files(session: AsyncSession, media_paths: list[MediaPath]) -> None:
+    """Drop rows for files the walk now skips but a previous version tracked.
+
+    A file scanned before hidden paths were skipped keeps its row forever
+    afterwards, because a scan only ever visits what the walk yields — so it
+    is never revisited and never cleaned up. One real library had a
+    `.cleanarr.tmp.` fragment of an interrupted remux still on the books,
+    generating normalization proposals against a half-written file.
+
+    Judged purely on the path, never on whether the file is present: a share
+    that failed to mount would make every file look gone, and deleting the
+    library's records over a mount hiccup would be far worse than a stale
+    row.
+    """
+    roots = [str(Path(mp.path)) for mp in media_paths]
+    if not roots:
+        return
+
+    candidates = (await session.exec(select(MediaFile))).all()
+    for media_file in candidates:
+        path = Path(media_file.path)
+        root = next((r for r in roots if media_file.path.startswith(r)), None)
+        if root is None:
+            continue
+        if not any(part.startswith(".") for part in path.relative_to(root).parts):
+            continue
+
+        for table in (PendingChange, NormalizationChange, StreamRecord):
+            for row in (await session.exec(select(table).where(table.file_id == media_file.id))).all():
+                await session.delete(row)
+        await session.delete(media_file)
 
 
 def _stream_from_record(record: StreamRecord) -> MediaStream:

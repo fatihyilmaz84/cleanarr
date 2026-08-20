@@ -268,3 +268,41 @@ async def test_a_customized_cc_pattern_is_never_overwritten(tmp_path):
 
     assert config.cc_title_patterns == ["my-own-pattern"]
     await engine.dispose()
+
+
+def test_every_endonym_survives_a_second_pass_unchanged():
+    """The idempotency rule, swept across the whole language table.
+
+    Each marker label this module emits has to be matched by its own config
+    pattern, or pass 2 strips what pass 1 added. The language half of a
+    title is now the endonym, so the risk is a language whose own name
+    happens to contain a marker pattern — an endonym with a standalone "cc"
+    or "ad" in it would quietly gain a bogus attribute on every rescan, on
+    every file in that language. Schedules run this unattended, so nothing
+    would notice.
+    """
+    from app.languages import LANGUAGE_OPTIONS
+    from app.normalizer import NormalizerConfig, normalize_streams
+
+    config = NormalizerConfig()
+    markers = [
+        ({}, "subtitle"),
+        ({"is_hearing_impaired": True}, "subtitle"),
+        ({"is_forced": True}, "subtitle"),
+        ({"is_commentary": True}, "audio"),
+        ({"is_visual_impaired": True}, "audio"),
+    ]
+
+    unstable = []
+    for _name, code in LANGUAGE_OPTIONS:
+        for flags, codec_type in markers:
+            first = normalize_streams(
+                [make_stream(1, codec_type, codec_name="subrip", language=code, title=None, **flags)], config
+            )[0].new_title
+            second = normalize_streams(
+                [make_stream(1, codec_type, codec_name="subrip", language=code, title=first, **flags)], config
+            )[0]
+            if second.new_title != first or second.changed:
+                unstable.append((code, flags, first, second.new_title))
+
+    assert unstable == []

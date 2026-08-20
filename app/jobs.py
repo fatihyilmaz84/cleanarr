@@ -186,8 +186,15 @@ class JobManager:
         jobs, so a scan that died used to leave the UI showing a cheerful
         "Idle" and no indication anything had gone wrong.
         """
-        failed = [j for j in self._jobs.values() if j.state == JobState.error]
-        return max(failed, key=lambda j: j.finished_at or j.created_at, default=None)
+        finished = [j for j in self._jobs.values() if j.finished_at is not None]
+        if not finished:
+            return None
+        # Only the *last* thing that ran, and only if it failed. A failure
+        # that something later succeeded past is history, not news — without
+        # this, one bad scan nags on every page load until the process
+        # restarts, since dismissing it only lives as long as the DOM.
+        latest = max(finished, key=lambda j: j.finished_at)
+        return latest if latest.state == JobState.error else None
 
     def _prune_finished(self) -> None:
         finished = [j for j in self._jobs.values() if j.state in (JobState.done, JobState.error)]

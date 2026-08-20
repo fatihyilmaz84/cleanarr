@@ -241,6 +241,28 @@
     {{ _overview_stats.total_files if _overview_stats else 0 }}
   ];
 
+  function hasUnsavedInput() {
+    // Every page shares this script, including the ones that are nothing but
+    // a form (Rules, Schedule, both Settings pages). A scheduled scan
+    // finishing at 03:00 moves the counts, and reloading on that would throw
+    // away regexes someone is halfway through typing. Their input wins; the
+    // badges still update, so the page doesn't pretend nothing happened.
+    var controls = document.querySelectorAll("form input, form textarea, form select");
+    for (var i = 0; i < controls.length; i++) {
+      var c = controls[i];
+      if (c.type === "checkbox" || c.type === "radio") {
+        if (c.checked !== c.defaultChecked) return true;
+      } else if (c.tagName === "SELECT") {
+        for (var j = 0; j < c.options.length; j++) {
+          if (c.options[j].selected !== c.options[j].defaultSelected) return true;
+        }
+      } else if (c.type !== "submit" && c.type !== "button" && c.type !== "hidden") {
+        if (c.value !== c.defaultValue) return true;
+      }
+    }
+    return false;
+  }
+
   function countsMoved(data) {
     return renderedCounts[0] !== data.pending_review_count
       || renderedCounts[1] !== data.queued_count
@@ -325,7 +347,7 @@
 
     if (active) {
       render(data.job);
-    } else if (wasActive || countsMoved(data)) {
+    } else if ((wasActive || countsMoved(data)) && !hasUnsavedInput()) {
       // A job just finished — or finished unseen while this tab was hidden.
       // Either way, reload once so the server re-renders what it produced
       // (new pending items, history, reclaimed space).

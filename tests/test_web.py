@@ -676,3 +676,13 @@ def test_page_reloads_when_work_completed_unseen(client: TestClient, media_dir: 
     # Rendered with the real current values, so a later poll can diff them.
     status = client.get("/api/status").json()
     assert "total_files" in status  # a scan can add files without moving any other count
+
+
+def test_the_page_does_not_reload_over_input_someone_is_typing(client: TestClient):
+    """Every page shares the polling script, including ones that are nothing
+    but a form. A scheduled scan finishing moves the counts, and reloading on
+    that would discard regexes someone is halfway through typing.
+    """
+    page = client.get("/rules").text
+    assert "hasUnsavedInput" in page
+    assert "(wasActive || countsMoved(data)) && !hasUnsavedInput()" in page

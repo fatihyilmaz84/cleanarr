@@ -344,3 +344,97 @@ async def test_scan_skips_hidden_files(tmp_path, media_dir, monkeypatch):
     assert summary.errors == []
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_media_inside_a_hidden_directory_is_skipped(tmp_path, media_dir, monkeypatch):
+    """SMB shares grow a .Trash-1000/ recycle bin. The media inside it is
+    media the user already deleted — scanning it would propose work on it,
+    and remuxing one would resurrect it as a write.
+    """
+    trash = media_dir / ".Trash-1000" / "files"
+    trash.mkdir(parents=True)
+    (trash / "Deleted Movie.mkv").write_bytes(b"x" * 1000)
+
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        summary = await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    assert summary.files_total == 1  # only the real one
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_row_for_a_now_skipped_hidden_file_is_forgotten(tmp_path, media_dir, monkeypatch):
+    """A file tracked before hidden paths were skipped is never revisited —
+    the walk no longer yields it — so its row would linger forever. One real
+    library still had a `.cleanarr.tmp.` fragment of an interrupted remux on
+    the books, proposing changes against a half-written file.
+    """
+    from app.models import LibraryType, MediaFile, NormalizationChange, StreamRecord
+
+    leftover = media_dir / ".cleanarr.tmp.Movie.mkv"
+    leftover.write_bytes(b"x" * 1000)
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    # Seed it the way an older version would have left it.
+    async with session_factory() as session:
+        mf = MediaFile(path=str(leftover), library_type=LibraryType.movie, size_bytes=1000, mtime=1.0)
+        session.add(mf)
+        await session.commit()
+        await session.refresh(mf)
+        session.add(StreamRecord(file_id=mf.id, stream_index=0, codec_type="audio", codec_name="ac3"))
+        session.add(NormalizationChange(file_id=mf.id, proposed=[]))
+        await session.commit()
+        stale_id = mf.id
+
+    async with session_factory() as session:
+        await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    async with session_factory() as session:
+        # By path, not by id: SQLite reuses a deleted rowid, and the scan
+        # inserts the real file right after this cleanup runs.
+        remaining = (await session.exec(select(MediaFile).where(MediaFile.path == str(leftover)))).all()
+        assert remaining == []
+        assert (await session.exec(select(NormalizationChange).where(NormalizationChange.file_id == stale_id))).all() == []
+
+    await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_a_missing_file_is_not_forgotten_just_for_being_absent(tmp_path, media_dir, monkeypatch):
+    """The cleanup judges paths, never presence. A share that failed to mount
+    makes every file look gone, and wiping the library's records over a mount
+    hiccup would be far worse than a stale row.
+    """
+    from app.models import LibraryType, MediaFile
+
+    monkeypatch.setattr("app.scanner.probe_file", _make_probe)
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        mf = MediaFile(path=str(media_dir / "Vanished.mkv"), library_type=LibraryType.movie)
+        session.add(mf)
+        await session.commit()
+        await session.refresh(mf)
+        gone_id = mf.id
+
+    async with session_factory() as session:
+        await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    async with session_factory() as session:
+        assert await session.get(MediaFile, gone_id) is not None  # kept
+
+    await engine.dispose()

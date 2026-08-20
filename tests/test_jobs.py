@@ -183,3 +183,33 @@ async def test_worker_loop_prunes_after_each_job_end_to_end():
         assert manager.current() is None
     finally:
         await manager.stop()
+
+
+def test_a_failure_stops_being_reported_once_something_succeeds_after_it():
+    """A failure that a later job succeeded past is history, not news.
+    Without this it nags on every page load until the process restarts,
+    since dismissing the banner only lives as long as the DOM.
+    """
+    manager = JobManager()
+    now = datetime.now(timezone.utc)
+    failed = _job("failed", JobState.error, now - timedelta(minutes=10))
+    failed.finished_at = now - timedelta(minutes=10)
+    manager._jobs["failed"] = failed
+    assert manager.last_failed() is failed
+
+    later = _job("later", JobState.done, now)
+    later.finished_at = now
+    manager._jobs["later"] = later
+    assert manager.last_failed() is None
+
+
+def test_a_job_still_running_does_not_clear_an_earlier_failure():
+    # It hasn't succeeded yet — it may fail too. Only a finished job counts.
+    manager = JobManager()
+    now = datetime.now(timezone.utc)
+    failed = _job("failed", JobState.error, now - timedelta(minutes=10))
+    failed.finished_at = now - timedelta(minutes=10)
+    manager._jobs["failed"] = failed
+    manager._jobs["running"] = _job("running", JobState.running, now)
+
+    assert manager.last_failed() is failed

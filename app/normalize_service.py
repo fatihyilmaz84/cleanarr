@@ -73,9 +73,8 @@ def _stream_from_record(record: StreamRecord) -> MediaStream:
 
 def _record_like(stream: MediaStream) -> StreamRecord:
     """A throwaway StreamRecord view of a freshly probed stream, so
-    _detect_missing_languages can run against the re-probed file at apply
-    time using the same code path as the propose pass. Not added to the
-    session — the persisted rows are rewritten by the caller from the probe.
+    _detect_missing_languages can run against a file whose cached rows are
+    known to be out of date. Never added to the session — pass persist=False.
     """
     return StreamRecord(
         file_id=0,
@@ -88,7 +87,7 @@ def _record_like(stream: MediaStream) -> StreamRecord:
 
 
 async def _detect_missing_languages(
-    session: AsyncSession, media_file: MediaFile, records: list[StreamRecord]
+    session: AsyncSession, media_file: MediaFile, records: list[StreamRecord], *, persist: bool = True
 ) -> dict[int, str]:
     """Work out the language of any text subtitle the file labelled with
     neither a language nor a title, by reading the track's own text.
@@ -100,7 +99,6 @@ async def _detect_missing_languages(
     """
     detected: dict[int, str] = {}
     for record in records:
-        persist = record.file_id != 0  # see _record_like: apply-time views aren't stored
         if record.detected_language:
             detected[record.stream_index] = record.detected_language
             continue
@@ -119,6 +117,35 @@ async def _detect_missing_languages(
         if code:
             detected[record.stream_index] = code
     return detected
+
+
+async def _detected_languages_for_apply(
+    session: AsyncSession, media_file: MediaFile, path: Path, probe, config: NormalizerConfig
+) -> dict[int, str]:
+    """Languages for the untagged tracks of a file about to be written.
+
+    Reading a track's text costs an ffmpeg decode of the subtitle stream, and
+    propose already did it and stored the answer — so this reuses that
+    whenever the file is byte-for-byte what it was then. Re-deriving it every
+    apply would decode every untagged track in the library again for
+    information already on hand.
+
+    When the file *has* changed since (an *arr upgrade — the same case that
+    makes the re-probe above mandatory), the stored answer describes a
+    different file's tracks and must not be written onto this one's, so it
+    is worked out again from what is actually there now.
+    """
+    if not config.detect_subtitle_language:
+        return {}
+
+    stat = path.stat()
+    if media_file.size_bytes == stat.st_size and media_file.mtime == stat.st_mtime:
+        records = (await session.exec(select(StreamRecord).where(StreamRecord.file_id == media_file.id))).all()
+        return await _detect_missing_languages(session, media_file, records, persist=True)
+
+    return await _detect_missing_languages(
+        session, media_file, [_record_like(s) for s in probe.streams], persist=False
+    )
 
 
 def _dropped_indices_from_change(change: PendingChange | None) -> set[int]:
@@ -368,19 +395,7 @@ async def apply_normalization_change(
     dropped = _dropped_indices_from_change(active_change)
 
     all_streams = probe.streams
-    # Re-detect from the *re-probed* file rather than reusing what propose
-    # stored: the file may have been replaced since (the same reason the
-    # probe above is re-run), and a language read out of the old file's text
-    # must not be written onto a different one's track.
-    detected = (
-        await _detect_missing_languages(
-            session,
-            media_file,
-            [_record_like(s) for s in all_streams],
-        )
-        if config.detect_subtitle_language
-        else {}
-    )
+    detected = await _detected_languages_for_apply(session, media_file, path, probe, config)
     normalizations = normalize_streams(all_streams, config, detected_languages=detected)
     # Both exclusions — currently-proposed-for-removal and the user's own
     # skip selections — are applied the same way, after full-file selector
@@ -424,7 +439,11 @@ async def apply_normalization_change(
                 stream_index=s.index,
                 codec_type=s.codec_type,
                 codec_name=s.codec_name,
-                language=s.language,
+                # The probe was taken *before* mkvpropedit ran, so for a
+                # track that just had its language written, s.language is
+                # the old empty value — fold in what was written, exactly as
+                # the title and default flag beside it already do.
+                language=(n.new_language if n is not None and n.new_language else s.language),
                 title=n.new_title if n is not None else s.title,
                 channels=s.channels,
                 is_default=(n.new_default if n is not None and n.new_default is not None else s.is_default),
