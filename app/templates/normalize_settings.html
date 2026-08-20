@@ -31,10 +31,10 @@
     <div>
       <label class="font-label-caps text-label-caps text-on-surface-variant block mb-2">Naming style</label>
       <select name="naming_style" class="w-full bg-[#050505] text-on-surface font-body-md text-body-md rounded-DEFAULT py-2 px-3 tech-border focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary/50">
-        <option value="dash" {% if config.naming_style == "dash" %}selected{% endif %}>English - SDH</option>
-        <option value="space" {% if config.naming_style == "space" %}selected{% endif %}>English SDH</option>
+        <option value="dash" {% if config.naming_style == "dash" %}selected{% endif %}>English - SDH · Nederlands - SDH</option>
+        <option value="space" {% if config.naming_style == "space" %}selected{% endif %}>English SDH · Nederlands SDH</option>
       </select>
-      <p class="font-body-md text-body-md text-on-surface-variant mt-1">Applied library-wide — one canonical scheme, not per-file.</p>
+      <p class="font-body-md text-body-md text-on-surface-variant mt-1">Applied library-wide — one canonical scheme, not per-file. Tracks are named in their own language (a Dutch track becomes <span class="font-code-md">Nederlands</span>, a German one <span class="font-code-md">Deutsch</span>), since the title is what shows up in your player's track picker. The keep-lists under <a href="/rules" class="text-primary">Rules</a> stay in English — those are for you, not for the file.</p>
     </div>
 
     <div class="tech-border rounded-DEFAULT p-4">

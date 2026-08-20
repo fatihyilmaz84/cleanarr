@@ -120,7 +120,7 @@ def test_disambiguation_only_fires_on_an_actual_collision():
         make_stream(0, "audio", language="eng", channels=6),
         make_stream(1, "audio", language="jpn", channels=2),
     ]
-    assert title_of(streams) == {0: "English", 1: "Japanese"}
+    assert title_of(streams) == {0: "English", 1: "日本語"}
 
 
 def test_audio_and_subtitle_of_the_same_language_do_not_collide():

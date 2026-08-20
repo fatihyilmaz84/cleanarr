@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 
 from app.analyzer import MediaStream
-from app.languages import iso_codes_for_language_name, language_name_for_code
+from app.languages import endonym_for_code, iso_codes_for_language_name
 from app.text_patterns import matches_any_pattern
 
 _TRACK_TYPE_LETTER = {"video": "v", "audio": "a", "subtitle": "s"}
@@ -293,7 +293,11 @@ def normalize_streams(
         track_selector = f"{_TRACK_TYPE_LETTER[stream.codec_type]}{type_counts[stream.codec_type]}"
 
         effective_language = stream.language or detected.get(stream.index)
-        language_name = language_name_for_code(effective_language)
+        # The track's own name for its language ("Nederlands", not "Dutch").
+        # These titles are written into the file and read by whoever watches
+        # it, so they're in the viewer's language rather than the app's —
+        # and it's usually what the file already said before normalizing.
+        language_name = endonym_for_code(effective_language)
         if language_name is None:
             results.append(
                 TrackNormalization(

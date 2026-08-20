@@ -497,7 +497,7 @@ async def test_apply_reprobes_and_does_not_trust_stale_cached_tracks(session_fac
 
     assert result.success is True
     # Titles follow the file's real layout, not the cache: a1 is Japanese.
-    assert "name=Japanese" in calls[0]
+    assert "name=日本語" in calls[0]
     assert "name=English" in calls[0]
 
     async with session_factory() as session:
@@ -506,7 +506,7 @@ async def test_apply_reprobes_and_does_not_trust_stale_cached_tracks(session_fac
         ).all()
         # Cache rebuilt from the probe, so it now reflects reality.
         assert [(r.stream_index, r.language, r.title) for r in records] == [
-            (0, "jpn", "Japanese"),
+            (0, "jpn", "日本語"),
             (1, "eng", "English"),
         ]
 

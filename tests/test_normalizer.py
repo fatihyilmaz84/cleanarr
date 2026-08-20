@@ -48,7 +48,7 @@ def test_original_and_dubbed_detected_via_title_pattern():
         make_stream(1, "audio", language="eng", title="Dubbed"),
     ]
     result = by_index(streams, NormalizerConfig())
-    assert result[0].new_title == "Japanese - Original"
+    assert result[0].new_title == "日本語 - Original"
     assert result[1].new_title == "English - Dubbed"
 
 
@@ -160,7 +160,7 @@ def test_auto_default_disabled_leaves_default_flags_alone():
 
 
 def test_auto_default_with_no_matching_language_touches_nothing():
-    streams = [make_stream(0, "audio", language="jpn", title="Japanese", is_default=True)]
+    streams = [make_stream(0, "audio", language="jpn", title="日本語", is_default=True)]
     config = NormalizerConfig(auto_default_audio=True, preferred_audio_language="English")
     n = by_index(streams, config)[0]
     assert n.new_default is None
@@ -218,7 +218,7 @@ def test_identical_titles_are_still_normalized_together():
 
     results = normalize_streams(streams, NormalizerConfig())
 
-    assert [n.new_title for n in results] == ["Spanish", "Spanish"]
+    assert [n.new_title for n in results] == ["Español", "Español"]
     assert all(n.changed for n in results)
 
 
@@ -248,7 +248,7 @@ def test_a_detected_language_names_the_track_and_writes_the_missing_tag():
 
     result = normalize_streams(streams, NormalizerConfig(), detected_languages={1: "dut"})[0]
 
-    assert result.new_title == "Dutch"
+    assert result.new_title == "Nederlands"
     assert result.old_language is None
     assert result.new_language == "dut"
     assert result.changed is True
@@ -273,3 +273,61 @@ def test_without_a_detection_an_unlabelled_track_is_left_alone():
     assert result.changed is False
     assert result.new_language is None
     assert "no language tag" in result.reason
+
+
+def test_tracks_are_titled_in_their_own_language():
+    """A track title is written into the file and read by whoever watches it,
+    so it says what the language calls itself. Retitling "Nederlands" to
+    "Dutch" was the normalizer's own doing, not anything configured.
+    """
+    streams = [
+        make_stream(1, "subtitle", codec_name="subrip", language="dut", title="Nederlands"),
+        make_stream(2, "subtitle", codec_name="subrip", language="ger", title="Deutsch"),
+        make_stream(3, "subtitle", codec_name="subrip", language="tur", title="Türkçe"),
+    ]
+
+    results = normalize_streams(streams, NormalizerConfig())
+
+    assert [n.new_title for n in results] == ["Nederlands", "Deutsch", "Türkçe"]
+    # And so a file already labelled this way needs no work at all.
+    assert all(n.changed is False for n in results)
+
+
+def test_an_english_named_track_is_retitled_to_the_endonym():
+    streams = [make_stream(1, "subtitle", codec_name="subrip", language="fre", title="French")]
+
+    result = normalize_streams(streams, NormalizerConfig())[0]
+
+    assert result.new_title == "Français"
+    assert result.changed is True
+
+
+def test_markers_still_normalize_alongside_an_endonym():
+    # The attribute grammar is unchanged — only the language part of the
+    # title moved to the endonym.
+    streams = [
+        make_stream(1, "subtitle", codec_name="subrip", language="dut", title="Nederlands (SDH)",
+                    is_hearing_impaired=True),
+        make_stream(2, "subtitle", codec_name="subrip", language="ger", title="Deutsch forced", is_forced=True),
+    ]
+
+    results = normalize_streams(streams, NormalizerConfig())
+
+    assert [n.new_title for n in results] == ["Nederlands - SDH", "Deutsch - Forced"]
+
+
+def test_titling_in_endonyms_is_idempotent():
+    """Every pattern set must match the label this module emits, or a second
+    pass strips what the first added. That property has to hold for endonym
+    titles too, since schedules run this unattended.
+    """
+    streams = [
+        make_stream(1, "subtitle", codec_name="subrip", language="dut", title="Nederlands - SDH",
+                    is_hearing_impaired=True),
+        make_stream(2, "audio", codec_name="ac3", language="tur", title="Türkçe - Commentary", is_commentary=True),
+    ]
+
+    results = normalize_streams(streams, NormalizerConfig())
+
+    assert [n.new_title for n in results] == ["Nederlands - SDH", "Türkçe - Commentary"]
+    assert all(n.changed is False for n in results)
