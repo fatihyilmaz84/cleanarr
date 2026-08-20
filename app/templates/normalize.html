@@ -39,7 +39,7 @@
           </label>
         {% endfor %}
         {% for c in item.unchanged %}
-          <span class="font-code-md text-[11px] text-on-surface-variant bg-white/5 px-2 py-1 rounded" title="{{ c.reason }}">{{ c.codec_type }}: &quot;{{ c.new_title }}&quot; <span class="text-on-surface-variant/60">({{ c.note }})</span></span>
+          <span class="font-code-md text-[11px] text-on-surface-variant bg-white/5 px-2 py-1 rounded" title="{{ c.reason }}">{{ c.codec_type }}: {{ c.label }} <span class="text-on-surface-variant/60">({{ c.note }})</span></span>
         {% endfor %}
       </div>
       <div class="flex gap-3">

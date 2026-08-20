@@ -102,6 +102,7 @@ def _serialize(n: TrackNormalization) -> dict:
         "new_default": n.new_default,
         "changed": n.changed,
         "reason": n.reason,
+        "format_label": n.format_label,
     }
 
 

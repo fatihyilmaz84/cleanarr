@@ -91,6 +91,9 @@ class TrackNormalization:
     new_default: bool | None  # None = leave the default flag alone
     changed: bool
     reason: str
+    # Format/layout summary ("AC-3 5.1", "SRT"), so a track with no title and
+    # no language can still be identified — see describe_track.
+    format_label: str = ""
 
 
 def _build_title(language_name: str, attributes: list[str], style: str) -> str:
@@ -171,6 +174,18 @@ _CODEC_LABELS = {
     "mov_text": "TX3G",
     "truehd": "TrueHD",
     "opus": "Opus",
+    # Audio codecs whose conventional spelling isn't just the uppercased
+    # ffmpeg name — these are the ones that actually turn up on a track with
+    # nothing else to identify it by.
+    "ac3": "AC-3",
+    "eac3": "E-AC-3",
+    "dts": "DTS",
+    "aac": "AAC",
+    "flac": "FLAC",
+    "mp3": "MP3",
+    "vorbis": "Vorbis",
+    "pcm_s16le": "PCM",
+    "pcm_s24le": "PCM",
 }
 
 
@@ -189,6 +204,25 @@ def _disambiguator(stream: MediaStream) -> str | None:
     if stream.codec_name and stream.codec_name != "unknown":
         return _CODEC_LABELS.get(stream.codec_name.lower(), stream.codec_name.upper())
     return None
+
+
+def describe_track(stream: MediaStream) -> str:
+    """How to point at a track that carries no title and no language — the
+    only two things the UI would normally name it by.
+
+    A file really can have neither (verified on a real release: an AC-3 5.1
+    audio track and two subrip tracks with completely empty tag sets), and
+    showing that as `""` gives no way to tell which track is meant, or to
+    find it again in a player. Its format and channel layout are always
+    known, and are enough to recognise it by.
+    """
+    bits = []
+    codec = stream.codec_name
+    if codec and codec != "unknown":
+        bits.append(_CODEC_LABELS.get(codec.lower(), codec.upper()))
+    if stream.codec_type == "audio" and stream.channels:
+        bits.append(_CHANNEL_LAYOUTS.get(stream.channels, f"{stream.channels}ch"))
+    return " ".join(bits)
 
 
 def _pick_default_index(streams: list[MediaStream], codec_type: str, preferred_codes: frozenset[str]) -> int | None:
@@ -252,6 +286,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
                     reason=f"language '{stream.language}' not recognized, left untouched"
                     if stream.language
                     else "no language tag, left untouched",
+                    format_label=describe_track(stream),
                 )
             )
             continue
@@ -314,6 +349,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
                         f"renaming to '{_build_title(language_name, attributes, config.naming_style)}' would make this "
                         "identical to another track that currently has its own distinct title, left untouched"
                     ),
+                    format_label=describe_track(stream),
                 )
             )
             continue
@@ -354,6 +390,7 @@ def normalize_streams(streams: list[MediaStream], config: NormalizerConfig) -> l
                 new_default=new_default,
                 changed=changed,
                 reason=reason,
+                format_label=describe_track(stream),
             )
         )
 

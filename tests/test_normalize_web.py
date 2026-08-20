@@ -224,10 +224,18 @@ def test_a_default_flag_change_is_described_as_such_not_as_a_no_op(client: TestC
         {"old_title": "eng", "new_title": "English", "old_default": False, "new_default": True}
     ) == '"eng" → "English", set as default'
 
-    # An untitled track gaining a title still reads correctly.
+    # An untitled track is identified by selector and format rather than by
+    # an empty pair of quotes that names nothing.
     assert _describe_normalization(
-        {"old_title": None, "new_title": "English", "old_default": True, "new_default": True}
-    ) == '"" → "English"'
+        {
+            "old_title": None,
+            "new_title": "English",
+            "old_default": True,
+            "new_default": True,
+            "track_selector": "a1",
+            "format_label": "AC-3 5.1",
+        }
+    ) == 'a1 · AC-3 5.1 → "English"'
 
 
 def test_a_track_the_cleaner_will_delete_says_so_rather_than_just_unchanged():
@@ -265,3 +273,28 @@ def test_the_two_skip_reasons_are_not_reported_as_the_same_thing():
     assert user[0].reason == SKIPPED_BY_USER
     assert cleaner[0].reason == SKIPPED_PENDING_REMOVAL
     assert user[0].changed is False and cleaner[0].changed is False
+
+
+def test_a_track_with_no_title_and_no_language_still_identifies_itself():
+    """A real release has an AC-3 5.1 audio track and two subrip tracks with
+    completely empty tag sets — no title, no language. The page showed those
+    as `""`, which names nothing and gives no way to find the track again in
+    a player. Its selector and format are always known.
+    """
+    from app.queries import _track_label
+
+    assert _track_label({"old_title": "English", "track_selector": "s1", "format_label": "SRT"}) == '"English"'
+    assert _track_label({"old_title": None, "track_selector": "a1", "format_label": "AC-3 5.1"}) == "a1 · AC-3 5.1"
+    assert _track_label({"old_title": "", "track_selector": "s2", "format_label": "SRT"}) == "s2 · SRT"
+    assert _track_label({"old_title": None, "track_selector": None, "format_label": None}) == "untitled track"
+
+
+def test_describe_track_summarises_format_and_layout():
+    from app.normalizer import describe_track
+    from tests.fixtures import make_stream
+
+    assert describe_track(make_stream(1, "audio", codec_name="ac3", channels=6)) == "AC-3 5.1"
+    assert describe_track(make_stream(2, "audio", codec_name="aac", channels=2)) == "AAC Stereo"
+    assert describe_track(make_stream(3, "subtitle", codec_name="subrip")) == "SRT"
+    # Channel count is an audio concept — never claimed for a subtitle.
+    assert describe_track(make_stream(4, "subtitle", codec_name="hdmv_pgs_subtitle", channels=6)) == "PGS"

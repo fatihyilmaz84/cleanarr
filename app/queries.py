@@ -116,6 +116,22 @@ async def overview_stats(session: AsyncSession) -> dict:
     }
 
 
+def _track_label(p: dict) -> str:
+    """How to refer to a track in the UI. Its title if it has one, otherwise
+    its position and format ("s2 · SRT", "a1 · AC-3 5.1").
+
+    A track with no title *and* no language showed as `""`, which names
+    nothing and gives no way to find it again in a player. Its selector and
+    format are always known.
+    """
+    title = p.get("old_title") or ""
+    if title:
+        return f'"{title}"'
+    selector = p.get("track_selector") or ""
+    fmt = p.get("format_label") or ""
+    return " · ".join(bit for bit in (selector, fmt) if bit) or "untitled track"
+
+
 def _describe_normalization(p: dict) -> str:
     """What this track's proposed change actually does, in words.
 
@@ -129,7 +145,7 @@ def _describe_normalization(p: dict) -> str:
     old_title = p.get("old_title") or ""
     new_title = p.get("new_title") or ""
     if old_title != new_title:
-        parts.append(f'"{old_title}" → "{new_title}"')
+        parts.append(f'{_track_label(p)} → "{new_title}"')
 
     new_default = p.get("new_default")
     if new_default is not None and bool(new_default) != bool(p.get("old_default")):
@@ -171,7 +187,9 @@ def _effective_normalize(change: NormalizationChange, mf: MediaFile | None) -> d
         "status": change.status.value,
         "proposed": change.proposed,
         "changes": [{**p, "summary": _describe_normalization(p)} for p in effective if p["changed"]],
-        "unchanged": [{**p, "note": _unchanged_note(p)} for p in effective if not p["changed"]],
+        "unchanged": [
+            {**p, "note": _unchanged_note(p), "label": _track_label(p)} for p in effective if not p["changed"]
+        ],
         "error_message": change.error_message,
         "created_at": change.created_at,
         # When this proposal was last recomputed. A normalize pass only runs
