@@ -12,6 +12,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.actions import submit_apply_job, submit_scan_job
@@ -36,9 +38,21 @@ from app.settings_store import (
 router = APIRouter()
 
 
+STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+
 @router.get("/api/health")
 async def health():
     return {"status": "ok"}
+
+
+@router.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    """Served at the root path as well as from /static, because browsers ask
+    for /favicon.ico on their own — for tabs opened before the page's own
+    <link rel="icon"> is parsed, and for anything that ignores it.
+    """
+    return FileResponse(STATIC_DIR / "favicon.ico", media_type="image/x-icon")
 
 
 @router.get("/api/settings")
@@ -229,6 +243,9 @@ def create_app(db_path: Path | None = None) -> FastAPI:
 
     app = FastAPI(title="Cleanarr", lifespan=_make_lifespan(db_path))
     app.add_middleware(GZipMiddleware, minimum_size=500)
+    # Resolved from this module's own location rather than the working
+    # directory, so it doesn't depend on where uvicorn was started from.
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(router)
     app.include_router(web_router)
     app.include_router(normalize_router)
