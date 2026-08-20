@@ -37,3 +37,8 @@ services:
       - /mnt/user/Arakli/Shows:/tv
     environment:
       - CLEANARR_DB_PATH=/config/cleanarr.db
+    # No `labels:` here on purpose — the Unraid ones (webui/icon/managed) are
+    # baked into the image by the Dockerfile, so they apply however the
+    # container is started, including the plain `docker run` this host
+    # actually uses. Repeating them here would just be a second copy to
+    # forget to update.

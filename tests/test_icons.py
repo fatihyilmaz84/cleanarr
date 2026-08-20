@@ -67,3 +67,32 @@ def test_static_dir_resolves_independently_of_the_working_directory():
     """
     assert STATIC_DIR.is_absolute()
     assert (STATIC_DIR / "favicon.ico").is_file()
+
+
+def test_the_sidebar_shows_the_app_logo(client):
+    """The top-left corner had a generic Material Symbols glyph
+    (movie_filter) rather than the app's own icon, which every other surface
+    — tab, home screen, PWA manifest — already used.
+    """
+    page = client.get("/").text
+    assert '<img src="/static/icon-192.png"' in page
+    assert "movie_filter" not in page
+    # and it's served
+    assert client.get("/static/icon-192.png").status_code == 200
+
+
+def test_the_image_carries_the_labels_unraid_reads():
+    """Unraid's Docker page uses these to give the container a WebUI entry in
+    its context menu and its own icon instead of an anonymous square. Baked
+    into the image so a plain `docker run` gets them too.
+    """
+    from pathlib import Path
+
+    dockerfile = Path(__file__).resolve().parent.parent / "Dockerfile"
+    content = dockerfile.read_text()
+    assert 'net.unraid.docker.managed="dockerman"' in content
+    assert 'net.unraid.docker.webui="http://[IP]:[PORT:8420]/"' in content
+    assert "net.unraid.docker.icon=" in content
+    # The port in the webui label has to match the one the image exposes,
+    # or the menu entry opens nothing.
+    assert "EXPOSE 8420" in content
