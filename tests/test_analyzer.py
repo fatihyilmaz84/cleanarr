@@ -100,3 +100,37 @@ def test_media_stream_from_ffprobe_defaults():
     assert s.title is None
     assert s.is_default is False
     assert s.is_forced is False
+
+
+def test_matroska_track_duration_comes_from_the_tag_not_the_repeated_container_duration():
+    # Matroska repeats the whole segment's duration in every stream's
+    # `duration` field. A real library file had a subtitle track reporting
+    # 6721.568s that way while its own DURATION tag said 01:50:24.052 —
+    # trusting the former made the remux verifier expect an output as long
+    # as the *dropped* audio track.
+    s = MediaStream.from_ffprobe_stream(
+        {
+            "index": 3,
+            "codec_type": "subtitle",
+            "codec_name": "subrip",
+            "duration": "6721.568000",
+            "tags": {"language": "eng", "DURATION": "01:50:24.052000000"},
+        },
+        trust_stream_duration=False,
+    )
+    assert s.duration_seconds == pytest.approx(6624.052)
+
+
+def test_matroska_track_with_no_duration_tag_is_unknown_rather_than_the_container_length():
+    s = MediaStream.from_ffprobe_stream(
+        {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "duration": "5422.432000"},
+        trust_stream_duration=False,
+    )
+    assert s.duration_seconds is None
+
+
+def test_mp4_track_duration_comes_from_the_stream_field():
+    s = MediaStream.from_ffprobe_stream(
+        {"index": 0, "codec_type": "video", "codec_name": "h264", "duration": "5603.597978"}
+    )
+    assert s.duration_seconds == pytest.approx(5603.597978)

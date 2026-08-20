@@ -282,3 +282,32 @@ async def test_rescan_reprobes_a_file_whose_cached_tracks_predate_the_channels_c
         assert all(r.channels is not None for r in audio)
 
     await engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_scan_survives_a_file_that_disappears_mid_scan(tmp_path, media_dir, monkeypatch):
+    """The directory walk runs up front, so a file can be gone by the time
+    its turn comes — Sonarr/Radarr replacing an upgraded file during a scan
+    is routine on a live library. That must cost one file, not the run.
+    """
+    (media_dir / "Vanishing.mkv").write_bytes(b"x" * 1000)
+
+    def probe(path):
+        if path.name == "Vanishing.mkv":
+            raise FileNotFoundError(2, "No such file or directory", str(path))
+        return _make_probe(path)
+
+    monkeypatch.setattr("app.scanner.probe_file", probe)
+
+    engine = make_engine(tmp_path / "test.db")
+    await init_db(engine)
+    session_factory = make_session_factory(engine)
+
+    async with session_factory() as session:
+        summary = await run_scan(session, [MediaPath(path=str(media_dir), library_type="movie")], RuleConfig())
+
+    assert summary.files_seen == 2
+    assert summary.files_scanned == 1  # the other file was still scanned
+    assert any("Vanishing.mkv" in e for e in summary.errors)
+
+    await engine.dispose()

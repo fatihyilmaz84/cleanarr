@@ -37,19 +37,48 @@ FULL_STREAMS = [
     {"index": 3, "codec_type": "subtitle", "codec_name": "subrip", "tags": {"language": "eng"}, "disposition": {}},
 ]
 
-# What the file looks like *after* the jpn audio track is stripped.
+# What the file looks like *after* the jpn audio track is stripped — i.e.
+# the outcome under the Default rules these tests configure.
 REDUCED_STREAMS = [FULL_STREAMS[0], FULL_STREAMS[1], FULL_STREAMS[3]]
 
 
+def _mapping_sidecar(out_path: Path) -> Path:
+    """Where the fake ffmpeg records the streams it was told to keep. Kept
+    beside the output rather than inside it, so the output file's own bytes
+    stay the fixed marker the byte-accounting assertions expect.
+    """
+    return out_path.with_name(out_path.name + ".streams.json")
+
+
 def _fake_subprocess_run(cmd, capture_output=True, text=True, timeout=None):
+    """Fake ffprobe/ffmpeg that actually honours the `-map` flags it's given.
+
+    The fake ffmpeg records which source streams it was told to keep, and
+    the fake ffprobe replays exactly those when asked about the temp file —
+    so a remux that maps the wrong tracks produces a wrong-looking output
+    here too, and app/remux.py's verification can catch it. Returning one
+    fixed stream list regardless of the mapping would make every remux look
+    correct to the verifier no matter what it actually asked for.
+    """
     if cmd[0] == "ffprobe":
         target = Path(cmd[-1])
-        streams = REDUCED_STREAMS if target.name.startswith(".cleanarr.tmp.") else FULL_STREAMS
+        streams = FULL_STREAMS
+        if target.name.startswith(".cleanarr.tmp."):
+            sidecar = _mapping_sidecar(target)
+            try:
+                streams = json.loads(sidecar.read_text())
+            except (OSError, ValueError):
+                streams = REDUCED_STREAMS
         payload = {"format": {"duration": "3600.000000"}, "streams": streams}
         return subprocess.CompletedProcess(cmd, 0, stdout=json.dumps(payload), stderr="")
     if cmd[0] == "ffmpeg":
         out_path = Path(cmd[-1])
         out_path.write_bytes(b"remuxed-bytes")
+        by_index = {s["index"]: s for s in FULL_STREAMS}
+        mapped = [cmd[i + 1] for i, tok in enumerate(cmd) if tok == "-map"]
+        kept = [by_index[int(m.split(":")[1])] for m in mapped if int(m.split(":")[1]) in by_index]
+        # Renumbered, the way a real remux renumbers the streams it keeps.
+        _mapping_sidecar(out_path).write_text(json.dumps([{**s, "index": n} for n, s in enumerate(kept)]))
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
     raise AssertionError(f"unexpected command: {cmd}")
 

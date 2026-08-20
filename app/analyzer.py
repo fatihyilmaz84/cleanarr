@@ -14,6 +14,46 @@ class AnalyzerError(RuntimeError):
     """Raised when ffprobe fails or returns something we can't parse."""
 
 
+def _parse_clock_or_seconds(raw: object) -> float | None:
+    """Accepts either "HH:MM:SS.nnnnnnnnn" (matroska's DURATION tag) or a
+    plain seconds float, since both spellings show up in ffprobe output.
+    """
+    if raw in (None, ""):
+        return None
+    try:
+        parts = str(raw).split(":")
+        if len(parts) == 3:
+            hours, minutes, seconds = parts
+            return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stream_duration_seconds(s: dict, lower_tags: dict, *, trust_stream_duration: bool) -> float | None:
+    """One track's own length in seconds, or None when the container doesn't
+    record one.
+
+    The per-track DURATION *tag* wins wherever it exists, because in
+    matroska ffprobe's `stream.duration` field is not per-track at all — it
+    repeats the whole segment's duration on every stream. Trusting it would
+    make a two-hour file's subtitle track look exactly as long as the
+    longest audio track in the file, which is the specific thing
+    app/remux.py::expected_duration_seconds must not be fooled by.
+
+    `trust_stream_duration` is therefore False for matroska: a track with no
+    DURATION tag there has an *unknown* length, which is honest and safe,
+    rather than the container's length, which is a lie. mp4/mov do record
+    real per-track durations in that field, so there it's used.
+    """
+    tagged = _parse_clock_or_seconds(lower_tags.get("duration"))
+    if tagged is not None:
+        return tagged
+    if trust_stream_duration:
+        return _parse_clock_or_seconds(s.get("duration"))
+    return None
+
+
 @dataclass(frozen=True)
 class MediaStream:
     index: int
@@ -30,9 +70,15 @@ class MediaStream:
     # Read so the normalizer can keep that marker instead of retitling such a
     # track to a plain language name, indistinguishable from the main audio.
     is_visual_impaired: bool = False
+    # This individual track's length. Only read at remux-verify time (see
+    # app/remux.py::verify_output), which needs the length of the tracks
+    # being *kept* — a container's own duration is the longest track in it,
+    # so it legitimately shrinks when the longest track is one being
+    # dropped. None when the container doesn't record a per-track length.
+    duration_seconds: float | None = None
 
     @classmethod
-    def from_ffprobe_stream(cls, s: dict) -> "MediaStream":
+    def from_ffprobe_stream(cls, s: dict, *, trust_stream_duration: bool = True) -> "MediaStream":
         tags = s.get("tags", {}) or {}
         disposition = s.get("disposition", {}) or {}
         # ffprobe tags are case-inconsistent across containers (mkv lowercases,
@@ -54,6 +100,7 @@ class MediaStream:
             is_commentary=bool(disposition.get("comment")),
             is_hearing_impaired=bool(disposition.get("hearing_impaired")),
             is_visual_impaired=bool(disposition.get("visual_impaired")),
+            duration_seconds=_stream_duration_seconds(s, lower_tags, trust_stream_duration=trust_stream_duration),
         )
 
 
@@ -117,5 +164,13 @@ def probe_file(path: Path, ffprobe_bin: str = FFPROBE_BIN) -> MediaProbe:
         except (TypeError, ValueError):
             duration = None
 
-    streams = [MediaStream.from_ffprobe_stream(s) for s in data.get("streams", [])]
+    # See _stream_duration_seconds: matroska repeats the segment duration in
+    # every stream's `duration` field instead of giving a real per-track one.
+    format_name = fmt.get("format_name", "") or ""
+    trust_stream_duration = "matroska" not in format_name and "webm" not in format_name
+
+    streams = [
+        MediaStream.from_ffprobe_stream(s, trust_stream_duration=trust_stream_duration)
+        for s in data.get("streams", [])
+    ]
     return MediaProbe(path=path, duration_seconds=duration, streams=streams)

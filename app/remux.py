@@ -7,8 +7,9 @@ backup/quarantine, so these are the only safety net):
   - preflight free-space check before touching anything
   - temp output written on the SAME filesystem as the source (required for an
     atomic replace, and to avoid a slow/space-doubling cross-disk copy)
-  - the output is re-probed and sanity-checked (stream count, duration)
-    before the original is replaced
+  - the output is re-probed and sanity-checked (the exact set of
+    video/audio/subtitle tracks that should have survived, and the length of
+    the longest kept track) before the original is replaced
   - the original is only ever replaced via one atomic `os.replace`
 """
 
@@ -18,6 +19,7 @@ import os
 import shutil
 import subprocess
 import threading
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,6 +29,12 @@ from app.rules import StreamDecision
 
 FFMPEG_BIN = "ffmpeg"
 FFPROBE_BIN = "ffprobe"
+
+# The track types this app actually decides about. Anything else in a
+# container (mp4 chapter/timecode `data` tracks, mkv font attachments) is
+# muxer bookkeeping — carried through, but not something to verify counts
+# of, since a muxer may legitimately add or drop its own.
+MANAGED_STREAM_TYPES = frozenset({"video", "audio", "subtitle"})
 
 DEFAULT_TIMEOUT_SECONDS = 1800  # generous: array writes can be slow with parity
 DURATION_TOLERANCE_SECONDS = 2.0
@@ -83,27 +91,66 @@ def build_ffmpeg_command(
     return cmd
 
 
+def _identity(stream) -> tuple[str, str, str | None]:
+    """What makes a track recognizably "the same track" across a stream
+    copy. Codec and language both survive `-c copy` untouched, so this
+    triple is stable — and specific enough to tell two same-language audio
+    tracks apart when they differ in codec (ac3 vs aac).
+    """
+    return (stream.codec_type, stream.codec_name, stream.language)
+
+
+def expected_duration_seconds(original: MediaProbe, decisions: list[StreamDecision]) -> float | None:
+    """How long the remuxed file *should* be: the longest track we're
+    keeping, not the length of the original container.
+
+    A container's duration is its longest track. Dropping that track — a
+    subtitle whose last cue runs past the credits, a dubbed audio track
+    with trailing padding — legitimately makes the output shorter, which
+    is not corruption. Falls back to the original container duration when
+    the container records no per-track lengths.
+    """
+    kept = [d.stream.duration_seconds for d in decisions if d.keep and d.stream.duration_seconds is not None]
+    return max(kept) if kept else original.duration_seconds
+
+
 def verify_output(
     original: MediaProbe,
     output_path: Path,
     decisions: list[StreamDecision],
     ffprobe_bin: str = FFPROBE_BIN,
 ) -> None:
-    expected_stream_count = sum(1 for d in decisions if d.keep)
+    """Confirm the remuxed file really is the original minus exactly the
+    tracks that were meant to go — checked before the original is replaced,
+    so a mismatch costs nothing but a discarded temp file.
+
+    Only video/audio/subtitle are compared. Muxers synthesize their own
+    bookkeeping tracks that were never in our `-map` list — the mp4 muxer
+    emits a `text`/`bin_data` chapter track of its own whenever the input
+    has chapters — so counting those would fail a remux that is in fact
+    perfectly correct.
+    """
     result = probe_file(output_path, ffprobe_bin=ffprobe_bin)
 
-    if len(result.streams) != expected_stream_count:
-        raise RemuxError(
-            f"verification failed for {output_path.name}: expected "
-            f"{expected_stream_count} streams, remuxed file has {len(result.streams)}"
-        )
+    expected = Counter(_identity(d.stream) for d in decisions if d.keep and d.stream.codec_type in MANAGED_STREAM_TYPES)
+    actual = Counter(_identity(s) for s in result.streams if s.codec_type in MANAGED_STREAM_TYPES)
+    if expected != actual:
+        missing = expected - actual
+        unexpected = actual - expected
+        detail = []
+        if missing:
+            detail.append("missing " + ", ".join(f"{t}/{c}/{lang or 'und'}" for t, c, lang in missing.elements()))
+        if unexpected:
+            detail.append("unexpected " + ", ".join(f"{t}/{c}/{lang or 'und'}" for t, c, lang in unexpected.elements()))
+        raise RemuxError(f"verification failed for {output_path.name}: {'; '.join(detail)}")
 
-    if original.duration_seconds is not None and result.duration_seconds is not None:
-        delta = abs(original.duration_seconds - result.duration_seconds)
+    expected_duration = expected_duration_seconds(original, decisions)
+    if expected_duration is not None and result.duration_seconds is not None:
+        delta = abs(expected_duration - result.duration_seconds)
         if delta > DURATION_TOLERANCE_SECONDS:
             raise RemuxError(
                 f"verification failed for {output_path.name}: duration changed by "
-                f"{delta:.1f}s (original {original.duration_seconds:.1f}s, "
+                f"{delta:.1f}s (expected ~{expected_duration:.1f}s from the kept tracks, "
                 f"remuxed {result.duration_seconds:.1f}s)"
             )
 

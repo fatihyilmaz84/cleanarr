@@ -5,7 +5,7 @@ import time
 import pytest
 
 from app import remux as remux_mod
-from app.remux import RemuxError, apply_remux, build_ffmpeg_command, preflight_check
+from app.remux import RemuxError, apply_remux, build_ffmpeg_command, preflight_check, verify_output
 from tests.fixtures import make_probe, make_stream
 
 from app.rules import StreamDecision
@@ -199,3 +199,86 @@ def test_apply_remux_verification_failure_leaves_original_untouched(tmp_path, mo
 
     assert f.read_bytes() == b"original"
     assert not (f.parent / f".cleanarr.tmp.{f.name}").exists()
+
+
+# --- verify_output -----------------------------------------------------
+#
+# Both cases below are taken from real files on a live library that the
+# original stream-count/container-duration checks rejected even though the
+# remux was correct — see the failure messages quoted in each test.
+
+
+def _verified(monkeypatch, original, decisions, output_streams, output_duration):
+    """Run verify_output against a faked probe of the remuxed file."""
+    monkeypatch.setattr(
+        remux_mod, "probe_file", lambda path, ffprobe_bin=None: make_probe(output_streams, duration_seconds=output_duration)
+    )
+    verify_output(original, remux_mod.Path("out.mkv"), decisions)
+
+
+def test_verify_output_ignores_a_chapter_track_the_muxer_added_itself(monkeypatch):
+    # Real case: "expected 4 streams, remuxed file has 5" — the mp4 muxer
+    # emits its own text/bin_data chapter track whenever the input has
+    # chapters, which was never in our -map list.
+    v = make_stream(0, "video", codec_name="h264", language=None)
+    a = make_stream(1, "audio", codec_name="ac3", language="eng")
+    s = make_stream(2, "subtitle", codec_name="mov_text", language="eng")
+    decisions = [kept(v), kept(a), kept(s)]
+
+    output = [v, a, s, make_stream(3, "data", codec_name="bin_data", language=None)]
+    _verified(monkeypatch, make_probe([v, a, s], duration_seconds=100.0), decisions, output, 100.0)
+
+
+def test_verify_output_rejects_a_kept_track_that_went_missing(monkeypatch):
+    v = make_stream(0, "video", codec_name="h264", language=None)
+    a_eng = make_stream(1, "audio", codec_name="ac3", language="eng")
+    a_jpn = make_stream(2, "audio", codec_name="ac3", language="jpn")
+    decisions = [kept(v), kept(a_eng), dropped(a_jpn)]
+
+    with pytest.raises(RemuxError, match="missing audio/ac3/eng"):
+        _verified(monkeypatch, make_probe([v, a_eng, a_jpn], duration_seconds=100.0), decisions, [v], 100.0)
+
+
+def test_verify_output_rejects_a_dropped_track_that_survived(monkeypatch):
+    v = make_stream(0, "video", codec_name="h264", language=None)
+    a_eng = make_stream(1, "audio", codec_name="ac3", language="eng")
+    a_jpn = make_stream(2, "audio", codec_name="ac3", language="jpn")
+    decisions = [kept(v), kept(a_eng), dropped(a_jpn)]
+
+    with pytest.raises(RemuxError, match="unexpected audio/ac3/jpn"):
+        _verified(monkeypatch, make_probe([v, a_eng, a_jpn], duration_seconds=100.0), decisions, [v, a_eng, a_jpn], 100.0)
+
+
+def test_verify_output_accepts_the_container_shrinking_when_the_longest_track_is_dropped(monkeypatch):
+    # Real case (WALL·E): "duration changed by 29.2s (original 5921.8s,
+    # remuxed 5892.6s)". The container was only 5921.8s long because of a
+    # Spanish subtitle track running past the credits — which this run
+    # drops. The video is 5891.9s; 5892.6s out is exactly right.
+    v = make_stream(0, "video", codec_name="av1", language=None, duration_seconds=5891.9)
+    a = make_stream(1, "audio", codec_name="opus", language="eng", duration_seconds=5892.6)
+    s_spa = make_stream(2, "subtitle", codec_name="subrip", language="spa", duration_seconds=5921.8)
+    decisions = [kept(v), kept(a), dropped(s_spa)]
+
+    _verified(monkeypatch, make_probe([v, a, s_spa], duration_seconds=5921.8), decisions, [v, a], 5892.6)
+
+
+def test_verify_output_still_catches_a_truncated_remux(monkeypatch):
+    # The check must stay strict about the case it exists for: output that
+    # is genuinely shorter than the tracks being kept.
+    v = make_stream(0, "video", codec_name="av1", language=None, duration_seconds=5891.9)
+    a = make_stream(1, "audio", codec_name="opus", language="eng", duration_seconds=5892.6)
+    s_spa = make_stream(2, "subtitle", codec_name="subrip", language="spa", duration_seconds=5921.8)
+    decisions = [kept(v), kept(a), dropped(s_spa)]
+
+    with pytest.raises(RemuxError, match="duration changed"):
+        _verified(monkeypatch, make_probe([v, a, s_spa], duration_seconds=5921.8), decisions, [v, a], 4000.0)
+
+
+def test_verify_output_falls_back_to_container_duration_when_tracks_have_none(monkeypatch):
+    v = make_stream(0, "video", codec_name="h264", language=None)
+    a = make_stream(1, "audio", codec_name="ac3", language="eng")
+    a_jpn = make_stream(2, "audio", codec_name="ac3", language="jpn")
+    decisions = [kept(v), kept(a), dropped(a_jpn)]
+
+    with pytest.raises(RemuxError, match="duration changed"):
+        _verified(monkeypatch, make_probe([v, a, a_jpn], duration_seconds=100.0), decisions, [v, a], 40.0)

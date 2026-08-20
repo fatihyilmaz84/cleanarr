@@ -26,6 +26,18 @@ from app.settings_store import MediaPath
 
 MEDIA_EXTENSIONS = {".mkv", ".mp4", ".m4v", ".avi", ".ts"}
 
+# A scan used to commit once per file. On the array this app runs on, one
+# commit costs ~13ms, so a 5,300-file library spent ~70 seconds of every
+# scan waiting on fsync alone — and nearly all of those commits write
+# nothing, since re-scanning an unchanged library only re-evaluates rules
+# against stream data already on file. Batching cuts it to ~50 commits.
+#
+# The batch is the unit of work a crash mid-scan can lose: those files just
+# get rescanned next time, exactly as they would after a scan interrupted
+# between files today. It is NOT a unit of safety — scanning never touches
+# a file on disk, it only writes proposals to the database.
+COMMIT_BATCH_SIZE = 100
+
 
 def _now():
     return datetime.now(timezone.utc)
@@ -115,9 +127,18 @@ async def run_scan(
             )
         except AnalyzerError as e:
             summary.errors.append(f"{file_path}: {e}")
+        except OSError as e:
+            # The directory walk happens up front, so a file can be gone (or
+            # renamed) by the time its turn comes — Sonarr/Radarr replacing
+            # an upgraded file mid-scan is routine on a live library. That's
+            # one file to note and skip, never a reason to abort the scan.
+            summary.errors.append(f"{file_path}: {e}")
+        if summary.files_seen % COMMIT_BATCH_SIZE == 0:
+            await session.commit()
         if progress_cb:
             progress_cb(summary)
 
+    await session.commit()
     return summary
 
 
@@ -238,14 +259,20 @@ async def _scan_one_file(
     # be updated in place on rescan, not left alone while a second
     # PendingChange row gets created for the same file (duplicate queue
     # entries covering the same tracks).
+    # .first(), not .one_or_none(): a duplicate pair of live rows for one
+    # file is a bug (and one that has been fixed), but if one ever reappears
+    # it must not raise MultipleResultsFound and abort the entire scan —
+    # updating the older row and moving on degrades far better.
     existing_change = (
         await session.exec(
-            select(PendingChange).where(
+            select(PendingChange)
+            .where(
                 PendingChange.file_id == media_file.id,
                 PendingChange.status.in_([ChangeStatus.pending, ChangeStatus.approved]),
             )
+            .order_by(PendingChange.id)
         )
-    ).one_or_none()
+    ).first()
 
     if dropped:
         summary.files_with_pending_changes += 1
@@ -291,4 +318,5 @@ async def _scan_one_file(
         # — the stale suggestion no longer applies.
         await session.delete(existing_change)
 
-    await session.commit()
+    # No commit here — run_scan commits in batches. See COMMIT_BATCH_SIZE.
+    await session.flush()
