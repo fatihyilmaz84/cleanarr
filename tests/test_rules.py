@@ -366,3 +366,136 @@ def test_turning_off_always_keep_forced_lets_the_language_filter_win():
     decisions = {d.stream.index: d for d in decide(make_probe(streams), config)}
 
     assert decisions[2].keep is False
+
+
+def _orphan_config(**kw):
+    base = dict(
+        audio_keep_languages=["eng", "dut", "tur"],
+        subtitle_keep_languages=["eng", "dut", "tur"],
+        drop_orphaned_forced_subtitles=True,
+    )
+    base.update(kw)
+    return RuleConfig(**base)
+
+
+def test_an_orphaned_forced_subtitle_is_dropped_when_asked():
+    """An Italian scene release: Italian audio and full Italian subtitles are
+    both being removed, so the Italian forced track serves nobody.
+    """
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "audio", language="ita"),
+        make_stream(3, "subtitle", language="ita", title="Italiano Forced", is_forced=True),
+    ]
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), _orphan_config(), original_language="English")}
+
+    assert decisions[2].keep is False
+    assert decisions[3].keep is False
+    assert "nothing in that language is being kept" in decisions[3].reason
+
+
+def test_forced_subs_in_a_language_you_read_are_never_orphans():
+    """The case that kills the obvious implementation. Squid Game: Korean
+    audio kept as the original language, English forced subtitles for the
+    on-screen signs. Judging by "does this language's audio survive" would
+    delete exactly the subtitles that make it watchable.
+    """
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="kor"),
+        make_stream(2, "subtitle", language="eng", title="English [Forced]", is_forced=True),
+    ]
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), _orphan_config(), original_language="Korean")}
+
+    assert decisions[1].keep is True  # kept as the original language
+    assert decisions[2].keep is True  # and the English forced subs survive with it
+
+
+def test_forced_subs_pairing_with_a_kept_dub_survive():
+    # Keeping the Turkish dub means the Turkish forced subs still have a use,
+    # even though Turkish isn't in the subtitle keep-list here.
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="tur"),
+        make_stream(2, "subtitle", language="tur", title="Türkçe Forced", is_forced=True),
+    ]
+    config = _orphan_config(audio_keep_languages=["tur"], subtitle_keep_languages=["eng"])
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), config, original_language="English")}
+
+    assert decisions[1].keep is True
+    assert decisions[2].keep is True
+
+
+def test_a_forced_sub_in_the_original_language_survives():
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "subtitle", language="kor", title="Korean Forced", is_forced=True),
+    ]
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), _orphan_config(), original_language="Korean")}
+
+    assert decisions[2].keep is True
+
+
+def test_an_untagged_forced_sub_is_left_to_the_untagged_rule():
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "subtitle", language=None, title="Forced", is_forced=True),
+    ]
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), _orphan_config(), original_language="English")}
+
+    assert decisions[2].keep is True
+
+
+def test_nothing_is_orphaned_when_no_subtitle_filter_is_configured():
+    # Every subtitle is being kept, so there's no language to be orphaned from.
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "subtitle", language="ita", title="Italiano Forced", is_forced=True),
+    ]
+    config = _orphan_config(subtitle_keep_languages=[])
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), config, original_language="English")}
+
+    assert decisions[2].keep is True
+
+
+def test_the_orphan_rule_is_off_unless_asked_for():
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "subtitle", language="ita", title="Italiano Forced", is_forced=True),
+    ]
+    config = RuleConfig(audio_keep_languages=["eng"], subtitle_keep_languages=["eng"])
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), config, original_language="English")}
+
+    assert decisions[2].keep is True
+    assert decisions[2].reason == "forced subtitle, always kept"
+
+
+def test_a_forced_sub_survives_when_the_safety_net_rescues_its_audio():
+    """The orphan check runs after the keep-at-least-one-audio net, so it
+    sees the audio that will really survive. Here every audio would have been
+    dropped, the net rescues the Italian track, and the Italian forced
+    subtitle must go with it rather than being judged against the audio the
+    language filter alone proposed.
+    """
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="ita", is_default=True),
+        make_stream(2, "subtitle", language="ita", title="Italiano Forced", is_forced=True),
+    ]
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), _orphan_config(), original_language="English")}
+
+    assert decisions[1].keep is True  # rescued by the safety net
+    assert decisions[2].keep is True  # so its forced subs are not orphans

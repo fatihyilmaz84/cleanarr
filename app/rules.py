@@ -25,6 +25,18 @@ class RuleConfig(BaseModel):
 
     keep_untagged_language: bool = True
     always_keep_forced_subtitles: bool = True
+    # Narrows the rule above to languages that actually survive in the file.
+    #
+    # A forced subtitle exists to translate the bits of dialogue that aren't
+    # in the language you're listening to. That makes it useful to someone
+    # who reads it — but a forced Italian track on a file whose Italian
+    # audio and full Italian subtitles are both being removed serves nobody,
+    # and leaves the odd result that a language is *almost* gone.
+    #
+    # Off by default: it drops tracks the setting above promises to keep, so
+    # it has to be asked for. See _drop_orphaned_forced_subtitles for exactly
+    # which four ways a forced track earns its place.
+    drop_orphaned_forced_subtitles: bool = False
     drop_commentary_tracks: bool = False
     drop_hearing_impaired_tracks: bool = False
 
@@ -123,7 +135,7 @@ def _decide_audio(stream: MediaStream, config: RuleConfig, original_language_cod
 
 def _decide_subtitle(stream: MediaStream, config: RuleConfig, original_language_codes: frozenset[str]) -> StreamDecision:
     if stream.is_forced and config.always_keep_forced_subtitles:
-        return StreamDecision(stream, True, "forced subtitle, always kept")
+        return StreamDecision(stream, True, FORCED_KEPT_REASON)
 
     drop_pattern = matches_any_pattern(stream.title, config.drop_title_patterns)
     if drop_pattern:
@@ -149,6 +161,75 @@ def _decide_subtitle(stream: MediaStream, config: RuleConfig, original_language_
         return StreamDecision(stream, True, f"language '{stream.language}' matches media's original language, kept")
 
     return StreamDecision(stream, False, f"language '{stream.language}' not in keep-list")
+
+
+FORCED_KEPT_REASON = "forced subtitle, always kept"
+
+
+def _drop_orphaned_forced_subtitles(
+    decisions: list[StreamDecision], config: RuleConfig, original_language_codes: frozenset[str]
+) -> list[StreamDecision]:
+    """Withdraw the forced-subtitle exemption from languages that aren't
+    staying in the file anyway.
+
+    A forced track keeps its exemption if any of these hold, and each is
+    someone it genuinely serves:
+
+      - its language is in the subtitle keep-list — they read it. This is
+        the one that matters most: a Korean film keeps its Korean audio as
+        the original language, and its *English* forced subtitles are
+        exactly what an English speaker needs for the on-screen signs.
+        Judging by "does this language's audio survive" would have thrown
+        those away.
+      - a kept audio track is in that language — the forced subs pair with
+        a dub that's staying.
+      - it's the media's own original language, mirroring
+        always_keep_original_language.
+      - it has no language tag at all, which keep_untagged_language governs.
+
+    Does nothing when no subtitle filter is configured, since then every
+    subtitle is being kept and there is no language to be orphaned from.
+
+    Runs after the keep-at-least-one-audio net below, so it sees the audio
+    that will really survive rather than what the language filter alone
+    proposed.
+    """
+    if not config.drop_orphaned_forced_subtitles:
+        return decisions
+    allowed_subtitles = config.normalized_subtitle_languages()
+    if not allowed_subtitles:
+        return decisions
+
+    kept_audio_languages = {
+        d.stream.language.lower()
+        for d in decisions
+        if d.stream.codec_type == "audio" and d.keep and d.stream.language
+    }
+
+    result = []
+    for d in decisions:
+        language = (d.stream.language or "").lower()
+        orphaned = (
+            d.keep
+            and d.stream.codec_type == "subtitle"
+            and d.stream.is_forced
+            and language
+            and language not in allowed_subtitles
+            and language not in kept_audio_languages
+            and language not in original_language_codes
+        )
+        if orphaned:
+            result.append(
+                StreamDecision(
+                    d.stream,
+                    False,
+                    f"forced subtitle in '{d.stream.language}', but nothing in that language is being "
+                    "kept — no audio, no subtitles, and it isn't the original language",
+                )
+            )
+        else:
+            result.append(d)
+    return result
 
 
 def _apply_keep_at_least_one_audio(decisions: list[StreamDecision]) -> list[StreamDecision]:
@@ -192,7 +273,8 @@ def decide(probe: MediaProbe, config: RuleConfig, original_language: str | None 
         else:
             decisions.append(StreamDecision(stream, True, f"unrecognized stream type '{stream.codec_type}', kept"))
 
-    return _apply_keep_at_least_one_audio(decisions)
+    decisions = _apply_keep_at_least_one_audio(decisions)
+    return _drop_orphaned_forced_subtitles(decisions, config, original_language_codes)
 
 
 def apply_overrides(decisions: list[StreamDecision], overrides: list[int] | None) -> list[StreamDecision]:

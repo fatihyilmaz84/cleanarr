@@ -55,6 +55,13 @@
         <input type="checkbox" name="always_keep_forced_subtitles" {% if rules.always_keep_forced_subtitles %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
         Always keep forced subtitles
       </label>
+      <div class="ml-7 mt-2">
+        <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
+          <input type="checkbox" name="drop_orphaned_forced_subtitles" {% if rules.drop_orphaned_forced_subtitles %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
+          …except in languages you're removing anyway
+        </label>
+        <p class="font-body-md text-[13px] text-on-surface-variant ml-7 mt-1">A forced subtitle translates the dialogue that isn't in the language you're listening to, so it's worth keeping — but a forced Italian track on a file whose Italian audio <em>and</em> full Italian subtitles are both being removed serves nobody. With this on, a forced track keeps its exemption only if you read that language, a kept audio track is in it, or it's the media's original language. A Korean film's <span class="font-code-md">English [Forced]</span> subtitles are safe either way.</p>
+      </div>
       <label class="flex items-center gap-3 font-body-md text-body-md text-on-surface">
         <input type="checkbox" name="always_keep_original_language" {% if rules.always_keep_original_language %}checked{% endif %} class="rounded border-white/20 bg-[#050505] text-primary focus:ring-primary">
         Always keep the media's original-language track, even if not in the keep-lists above

@@ -392,6 +392,7 @@ async def ui_save_rules(request: Request, session: AsyncSession = Depends(get_se
         hearing_impaired_title_patterns=_split_csv(form.get("hearing_impaired_title_patterns", "")),
         keep_untagged_language="keep_untagged_language" in form,
         always_keep_forced_subtitles="always_keep_forced_subtitles" in form,
+        drop_orphaned_forced_subtitles="drop_orphaned_forced_subtitles" in form,
         drop_commentary_tracks="drop_commentary_tracks" in form,
         drop_hearing_impaired_tracks="drop_hearing_impaired_tracks" in form,
         always_keep_original_language="always_keep_original_language" in form,

@@ -757,3 +757,24 @@ def test_a_kept_track_says_which_one_it_is_and_why(client: TestClient, media_dir
     # A kept track that has a title shows it, so two tracks of the same
     # language can be told apart — which is the whole point.
     assert 'KEEP subtitle eng' in page
+
+
+def test_the_orphaned_forced_subtitle_option_round_trips(client: TestClient):
+    page = client.get("/rules").text
+    assert "drop_orphaned_forced_subtitles" in page
+    assert "except in languages you&#39;re removing anyway" in page or "removing anyway" in page
+
+    client.post(
+        "/rules",
+        data={
+            "audio_keep_languages": "eng",
+            "subtitle_keep_languages": "eng",
+            "always_keep_forced_subtitles": "on",
+            "drop_orphaned_forced_subtitles": "on",
+        },
+    )
+    assert 'name="drop_orphaned_forced_subtitles" checked' in client.get("/rules").text
+
+    # And it stays off unless asked for.
+    client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
+    assert 'name="drop_orphaned_forced_subtitles" checked' not in client.get("/rules").text
