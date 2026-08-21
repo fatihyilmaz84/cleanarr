@@ -60,7 +60,7 @@
     </div>
     <div class="flex flex-wrap gap-2 mb-2">
       {% for s in item.kept %}
-        <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded">KEEP {{ s.type }} {{ s.language or '?' }}</span>
+        <span class="font-code-md text-[11px] text-secondary bg-secondary/10 px-2 py-1 rounded" title="{{ s.reason }}">KEEP {{ s.type }} {{ s.language or '?' }}{% if s.title %} &quot;{{ s.title }}&quot;{% endif %}</span>
       {% endfor %}
     </div>
     <form method="post" action="/review/{{ item.id }}/approve" class="review-item-form">

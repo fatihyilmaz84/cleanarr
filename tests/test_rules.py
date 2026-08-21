@@ -328,3 +328,41 @@ def test_disposition_flag_still_works_without_any_title_match():
 
     assert by_index[2].keep is False
     assert "disposition flag" in by_index[2].reason
+
+
+def test_a_forced_subtitle_is_kept_even_when_its_language_is_not():
+    """`always_keep_forced_subtitles` is checked before the language
+    keep-list, so a forced subtitle survives a language that is otherwise
+    being removed entirely. This is why a file can drop its Hindi audio and
+    keep a Hindi subtitle: the kept one is the forced track.
+    """
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "audio", language="hin", title="हिन्दी [Dolby Digital Plus 5.1]"),
+        make_stream(3, "subtitle", language="hin", title="हिन्दी [Forced]", is_forced=True),
+        make_stream(4, "subtitle", language="hin", title="हिन्दी"),
+    ]
+    config = RuleConfig(audio_keep_languages=["eng"], subtitle_keep_languages=["eng"])
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), config)}
+
+    assert decisions[2].keep is False  # the hin audio goes
+    assert decisions[3].keep is True   # the forced hin subtitle stays
+    assert decisions[3].reason == "forced subtitle, always kept"
+    assert decisions[4].keep is False  # the non-forced hin subtitle goes
+
+
+def test_turning_off_always_keep_forced_lets_the_language_filter_win():
+    streams = [
+        make_stream(0, "video", language=None),
+        make_stream(1, "audio", language="eng"),
+        make_stream(2, "subtitle", language="hin", title="हिन्दी [Forced]", is_forced=True),
+    ]
+    config = RuleConfig(
+        audio_keep_languages=["eng"], subtitle_keep_languages=["eng"], always_keep_forced_subtitles=False
+    )
+
+    decisions = {d.stream.index: d for d in decide(make_probe(streams), config)}
+
+    assert decisions[2].keep is False

@@ -736,3 +736,24 @@ def test_a_hostile_track_title_is_escaped_not_executed(client: TestClient):
     assert "<script>" in summary  # the value itself is preserved verbatim…
     page = client.get("/review").text
     assert "<script>alert(1)</script>" not in page  # …and escaped at render time
+
+
+def test_a_kept_track_says_which_one_it_is_and_why(client: TestClient, media_dir: Path):
+    """Kept tracks rendered as bare "KEEP subtitle hin" — no title, no reason
+    — while the dropped row beneath them carried both. With two subtitles in
+    one language, one kept and one dropped, there was nothing on screen that
+    said which was which or why: the answer ("forced subtitle, always kept")
+    was in the data the whole time and simply wasn't shown.
+    """
+    client.post("/rules", data={"audio_keep_languages": "eng", "subtitle_keep_languages": "eng"})
+    client.post("/settings/media-paths", data={"paths": f"{media_dir},movie"})
+    client.post("/scan")
+    _wait_for_idle(client)
+
+    page = client.get("/review").text
+    assert "KEEP audio eng" in page
+    # The reason travels as a tooltip, the same way the DROP rows do it.
+    assert "in keep-list" in page
+    # A kept track that has a title shows it, so two tracks of the same
+    # language can be told apart — which is the whole point.
+    assert 'KEEP subtitle eng' in page
